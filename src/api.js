@@ -91,6 +91,61 @@ app.get('/api/rankings/both', async (req, res) => {
   }
 });
 
+// ─── GET /api/schedule/all ───────────────────────────────────────────────────
+// Must be defined BEFORE /:teamId so Express doesn't treat "all" as a teamId.
+
+app.get('/api/schedule/all', async (req, res) => {
+  const season = parseInt(req.query.season || process.env.SEASON || '2026');
+  try {
+    const [rows] = await db.execute(
+      `SELECT team_id        AS teamId,
+              game_date      AS date,
+              game_time      AS time,
+              opponent,
+              is_home        AS isHome,
+              is_conference  AS isConference,
+              result,
+              team_score     AS teamScore,
+              opp_score      AS oppScore,
+              is_ot          AS isOT
+       FROM team_schedules
+       WHERE season = ?
+       ORDER BY game_date, game_time`,
+      [season]
+    );
+    res.json({ season, games: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── GET /api/schedule/:teamId ────────────────────────────────────────────────
+
+app.get('/api/schedule/:teamId', async (req, res) => {
+  const { teamId } = req.params;
+  const season = parseInt(req.query.season || process.env.SEASON || '2026');
+  try {
+    const [rows] = await db.execute(
+      `SELECT game_date      AS date,
+              game_time      AS time,
+              opponent,
+              is_home        AS isHome,
+              is_conference  AS isConference,
+              result,
+              team_score     AS teamScore,
+              opp_score      AS oppScore,
+              is_ot          AS isOT
+       FROM team_schedules
+       WHERE team_id = ? AND season = ?
+       ORDER BY game_date, game_time`,
+      [teamId, season]
+    );
+    res.json({ teamId, season, games: rows });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Start ───────────────────────────────────────────────────────────────────
 
 app.listen(PORT, '0.0.0.0', () => {
