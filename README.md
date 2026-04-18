@@ -54,3 +54,4 @@ db/
 
 OHSLA player stats require an authenticated login to enter/view. The `player_stats` table is in the schema for future use but is not currently populated by the scraper.
 # varsitylax-scraper
+# varsitylax-scraper
