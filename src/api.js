@@ -93,8 +93,8 @@ app.get('/api/rankings/both', async (req, res) => {
 
 // ─── Start ───────────────────────────────────────────────────────────────────
 
-app.listen(PORT, () => {
-  console.log(`[api] Listening on http://localhost:${PORT}`);
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`VarsityLax API running on port ${PORT}`);
 });
 
 module.exports = app;
