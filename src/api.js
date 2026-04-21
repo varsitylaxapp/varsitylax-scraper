@@ -35,7 +35,13 @@ app.get('/api/rankings/laxnumbers', async (req, res) => {
       [season]
     );
     const updated = rows[0]?.scrapedAt || null;
-    res.json({ source: 'laxnumbers', season, updated, rankings: rows });
+    const rankings = rows.map(r => ({
+      ...r,
+      rating: parseFloat(r.rating),
+      agd:    parseFloat(r.agd),
+      sched:  parseFloat(r.sched),
+    }));
+    res.json({ source: 'laxnumbers', season, updated, rankings });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -55,7 +61,8 @@ app.get('/api/rankings/laxpower', async (req, res) => {
       [season]
     );
     const updated = rows[0]?.scrapedAt || null;
-    res.json({ source: 'laxpower', season, updated, rankings: rows });
+    const rankings = rows.map(r => ({ ...r, consensus: parseFloat(r.consensus) }));
+    res.json({ source: 'laxpower', season, updated, rankings });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -83,8 +90,14 @@ app.get('/api/rankings/both', async (req, res) => {
 
     res.json({
       season,
-      laxnumbers: { updated: lnRows[0]?.scrapedAt || null, rankings: lnRows },
-      laxpower:   { updated: lpRows[0]?.scrapedAt || null, rankings: lpRows },
+      laxnumbers: {
+        updated:  lnRows[0]?.scrapedAt || null,
+        rankings: lnRows.map(r => ({ ...r, rating: parseFloat(r.rating), agd: parseFloat(r.agd), sched: parseFloat(r.sched) })),
+      },
+      laxpower: {
+        updated:  lpRows[0]?.scrapedAt || null,
+        rankings: lpRows.map(r => ({ ...r, consensus: parseFloat(r.consensus) })),
+      },
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
