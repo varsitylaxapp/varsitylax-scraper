@@ -132,6 +132,40 @@ app.get('/api/schedule/all', async (req, res) => {
   }
 });
 
+// ─── GET /api/schedule/playoffs ─────────────────────────────────────────────
+// Returns one row per unique playoff game (home team's perspective).
+// Must be defined BEFORE /:teamId so Express doesn't treat "playoffs" as a teamId.
+
+app.get('/api/schedule/playoffs', async (req, res) => {
+  try {
+    const season = parseInt(req.query.season || process.env.SEASON || '2026');
+    const startDate = '2026-05-15';
+
+    const [rows] = await db.execute(
+      `SELECT id, team_id AS home_team_id, opponent AS away_team,
+              game_date, game_time, team_score AS home_score,
+              opp_score AS away_score, scraped_at
+       FROM team_schedules
+       WHERE game_date >= ?
+         AND opponent != 'Team Place Holder'
+         AND is_home = 1
+         AND season = ?
+       ORDER BY game_date, game_time`,
+      [startDate, season]
+    );
+
+    const games = rows.map(r => ({
+      ...r,
+      home_score: r.home_score !== null ? parseInt(r.home_score, 10) : null,
+      away_score: r.away_score !== null ? parseInt(r.away_score, 10) : null,
+    }));
+
+    res.json({ games });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── GET /api/schedule/:teamId ────────────────────────────────────────────────
 
 app.get('/api/schedule/:teamId', async (req, res) => {
