@@ -139,7 +139,7 @@ app.get('/api/schedule/all', async (req, res) => {
 app.get('/api/schedule/playoffs', async (req, res) => {
   try {
     const season = parseInt(req.query.season || process.env.SEASON || '2026');
-    const startDate = '2026-05-15';
+    const startDate = '2026-05-14';
 
     const [rows] = await db.execute(
       `SELECT id, team_id AS home_team_id, opponent AS away_team,
