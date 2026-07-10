@@ -133,7 +133,7 @@ async function runAll() {
       const r = await dualWrite.writeGames(games, 'ohsla');
       await logScrape('ohsla-v2', r.written, r.unresolved.length ? 'partial' : 'success',
         r.unresolved.length ? `unresolved: ${r.unresolved.join(', ')}` : null);
-      console.log(`[OHSLA] ✓ v2: ${r.written} matchups upserted${r.unresolved.length ? ` — UNRESOLVED (${r.skipped}): ` + r.unresolved.join(', ') : ''}`);
+      console.log(`[OHSLA] ✓ v2: ${r.written} matchups upserted, ${r.pruned} stale pruned${r.unresolved.length ? ` — UNRESOLVED (${r.skipped}): ` + r.unresolved.join(', ') : ''}`);
     }
   } catch (err) {
     console.error('[OHSLA] ✗', err.message);

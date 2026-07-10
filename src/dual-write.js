@@ -120,8 +120,57 @@ async function writeGames(scrapedGames, source = 'ohsla') {
     written++;
   }
 
+  // ── Prune: mirror semantics for a mutable schedule ──────────────────────────
+  // When OHSLA reschedules a game, its natural key (date) changes: the live path
+  // inserts the new-date row and the old-date row is orphaned as a phantom
+  // 'scheduled' entry. Cancellations orphan the same way. Prune v2 rows that:
+  //   - are scheduled with no scores (never completed — nothing to lose),
+  //   - belong to this source (or are unclaimed backfill rows),
+  //   - involve a team whose page was SUCCESSFULLY scraped this run
+  //     (a failed page yields zero rows — its games are protected), and
+  //   - whose unordered pair+date no longer appears in the current feed.
+  const scrapedTeamIds = new Set();
+  for (const g of scrapedGames) {
+    const our = aliases.get(norm(g.teamId));
+    if (our) scrapedTeamIds.add(our.teamId);
+  }
+  const feedKeys = new Set();
+  for (const m of matchups.values()) {
+    feedKeys.add(`${Math.min(m.homeId, m.awayId)}|${Math.max(m.homeId, m.awayId)}|${m.date}`);
+  }
+
+  let pruned = 0;
+  if (scrapedTeamIds.size > 0 && matchups.size > 0) {
+    const ids = [...scrapedTeamIds];
+    const ph = ids.map(() => '?').join(',');
+    const [candidates] = await db.execute(
+      `SELECT id, home_team_id AS h, away_team_id AS a,
+              DATE_FORMAT(game_date, '%Y-%m-%d') AS d
+       FROM games
+       WHERE season = ? AND status = 'scheduled'
+         AND home_score IS NULL AND away_score IS NULL
+         AND (canonical_source IS NULL OR canonical_source = ?)
+         AND (home_team_id IN (${ph}) OR away_team_id IN (${ph}))`,
+      [SEASON, source, ...ids, ...ids]);
+    const stale = candidates.filter(c =>
+      !feedKeys.has(`${Math.min(c.h, c.a)}|${Math.max(c.h, c.a)}|${c.d}`));
+
+    // Circuit breaker: a large stale set means a broken/partial feed, not real
+    // reschedules. Never prune more than 20% of the current feed's matchup count.
+    if (stale.length > Math.max(5, Math.ceil(matchups.size * 0.2))) {
+      console.warn(`[dual-write] PRUNE SKIPPED: ${stale.length} stale candidates vs ${matchups.size} feed matchups — feed looks partial, refusing to prune`);
+    } else if (stale.length > 0) {
+      const [del] = await db.execute(
+        `DELETE FROM games WHERE id IN (${stale.map(() => '?').join(',')})`,
+        stale.map(s => s.id)); // game_source_records rows cascade
+      pruned = del.affectedRows;
+      console.log(`[dual-write] pruned ${pruned} stale scheduled game(s): ` +
+        stale.map(s => `#${s.id} ${s.d}`).join(', '));
+    }
+  }
+
   await refreshWinLoss(SEASON);
-  return { written, skipped: unresolved.size, unresolved: [...unresolved] };
+  return { written, pruned, skipped: unresolved.size, unresolved: [...unresolved] };
 }
 
 // ── Rankings: snapshot (hash-deduped) + entries ──────────────────────────────
