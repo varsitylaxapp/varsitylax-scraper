@@ -1,3 +1,7 @@
 node_modules/
 .env
 *.log
+
+# Migration artifacts — regenerable / point-in-time, never source
+db/migrate/backups/
+db/migrate/out/

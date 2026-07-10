@@ -4,8 +4,14 @@ const db   = require('./db');
 const { scrapeLaxNumbers } = require('./scrapers/laxnumbers');
 const { scrapeLaxPower }   = require('./scrapers/laxpower');
 const { scrapeOHSLA }      = require('./scrapers/ohsla');
+const dualWrite            = require('./dual-write');
 
 const SEASON = parseInt(process.env.SEASON || '2026');
+
+// WRITE_MODE (runbook E2/E6): 'legacy' (default) | 'dual' | 'v2'
+const WRITE_MODE  = process.env.WRITE_MODE || 'legacy';
+const writeLegacy = WRITE_MODE !== 'v2';
+const writeV2     = WRITE_MODE !== 'legacy';
 
 async function upsertLaxNumbers(rankings) {
   const sql = `
@@ -75,14 +81,22 @@ async function logScrape(source, count, status, errorMessage = null) {
 }
 
 async function runAll() {
-  console.log(`\n[${new Date().toISOString()}] Starting scrape run`);
+  console.log(`\n[${new Date().toISOString()}] Starting scrape run (WRITE_MODE=${WRITE_MODE})`);
 
   // ── LaxNumbers rankings ───────────────────────────────────────────────────
   try {
     const rankings = await scrapeLaxNumbers();
-    await upsertLaxNumbers(rankings);
-    await logScrape('laxnumbers', rankings.length, 'success');
-    console.log(`[LaxNumbers] ✓ ${rankings.length} teams saved`);
+    if (writeLegacy) {
+      await upsertLaxNumbers(rankings);
+      await logScrape('laxnumbers', rankings.length, 'success');
+      console.log(`[LaxNumbers] ✓ ${rankings.length} teams saved (legacy)`);
+    }
+    if (writeV2) {
+      const r = await dualWrite.writeRankings('laxnumbers', rankings);
+      await logScrape('laxnumbers-v2', rankings.length, r.unresolved.length ? 'partial' : 'success',
+        r.unresolved.length ? `unresolved: ${r.unresolved.join(', ')}` : null);
+      console.log(`[LaxNumbers] ✓ v2: ${r.snapshotId ? r.entries + ' entries, snapshot ' + r.snapshotId : 'unchanged, snapshot skipped'}${r.unresolved.length ? ' — UNRESOLVED: ' + r.unresolved.join(', ') : ''}`);
+    }
   } catch (err) {
     console.error('[LaxNumbers] ✗', err.message);
     await logScrape('laxnumbers', 0, 'error', err.message);
@@ -91,9 +105,17 @@ async function runAll() {
   // ── LaxPower rankings ─────────────────────────────────────────────────────
   try {
     const rankings = await scrapeLaxPower();
-    await upsertLaxPower(rankings);
-    await logScrape('laxpower', rankings.length, 'success');
-    console.log(`[LaxPower] ✓ ${rankings.length} teams saved`);
+    if (writeLegacy) {
+      await upsertLaxPower(rankings);
+      await logScrape('laxpower', rankings.length, 'success');
+      console.log(`[LaxPower] ✓ ${rankings.length} teams saved (legacy)`);
+    }
+    if (writeV2) {
+      const r = await dualWrite.writeRankings('laxpower', rankings);
+      await logScrape('laxpower-v2', rankings.length, r.unresolved.length ? 'partial' : 'success',
+        r.unresolved.length ? `unresolved: ${r.unresolved.join(', ')}` : null);
+      console.log(`[LaxPower] ✓ v2: ${r.snapshotId ? r.entries + ' entries, snapshot ' + r.snapshotId : 'unchanged, snapshot skipped'}${r.unresolved.length ? ' — UNRESOLVED: ' + r.unresolved.join(', ') : ''}`);
+    }
   } catch (err) {
     console.error('[LaxPower] ✗', err.message);
     await logScrape('laxpower', 0, 'error', err.message);
@@ -102,9 +124,17 @@ async function runAll() {
   // ── OHSLA schedules ───────────────────────────────────────────────────────
   try {
     const games = await scrapeOHSLA();
-    await upsertOHSLA(games);
-    await logScrape('ohsla', games.length, 'success');
-    console.log(`[OHSLA] ✓ ${games.length} games saved`);
+    if (writeLegacy) {
+      await upsertOHSLA(games);
+      await logScrape('ohsla', games.length, 'success');
+      console.log(`[OHSLA] ✓ ${games.length} games saved (legacy)`);
+    }
+    if (writeV2) {
+      const r = await dualWrite.writeGames(games, 'ohsla');
+      await logScrape('ohsla-v2', r.written, r.unresolved.length ? 'partial' : 'success',
+        r.unresolved.length ? `unresolved: ${r.unresolved.join(', ')}` : null);
+      console.log(`[OHSLA] ✓ v2: ${r.written} matchups upserted${r.unresolved.length ? ` — UNRESOLVED (${r.skipped}): ` + r.unresolved.join(', ') : ''}`);
+    }
   } catch (err) {
     console.error('[OHSLA] ✗', err.message);
     await logScrape('ohsla', 0, 'error', err.message);

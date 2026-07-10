@@ -1,0 +1,49 @@
+{
+  "_comment": "A7 opponent classification — feeds C3 (out-of-state placeholder teams) and C4 (team_aliases seeds). Reviewed by Spencer before Section C runs.",
+  "oregon_aliases": [
+    { "alias": "Grant - Central Eastside",   "canonical": "grant",            "occurrences": 18 },
+    { "alias": "West Salem - McNary",        "canonical": "west_salem",       "occurrences": 17 },
+    { "alias": "Corvallis Crescent Valley",  "canonical": "corvallis",        "occurrences": 16 },
+    { "alias": "Lake Oswego - Riverdale",    "canonical": "lake_oswego",      "occurrences": 15 },
+    { "alias": "Aloha - Southridge",         "canonical": "aloha_southridge", "occurrences": 15 },
+    { "alias": "Sprague - South Salem",      "canonical": "sprague",          "occurrences": 14 },
+    { "alias": "Nelson - Clackamas",         "canonical": "nelson",           "occurrences": 13 },
+    { "alias": "Bend - Caldera",             "canonical": "bend_caldera",     "occurrences": 8 }
+  ],
+  "out_of_state_placeholders": [
+    { "opponent": "Camas HS, WA",                  "slug": "camas_wa",            "name": "Camas",                     "state": "WA", "occurrences": 5 },
+    { "opponent": "Skyview HS, WA",                "slug": "skyview_wa",          "name": "Skyview",                   "state": "WA", "occurrences": 4 },
+    { "opponent": "Mercer Island, WA",             "slug": "mercer_island_wa",    "name": "Mercer Island",             "state": "WA", "occurrences": 3 },
+    { "opponent": "Borah HS, ID",                  "slug": "borah_id",            "name": "Borah",                     "state": "ID", "occurrences": 3 },
+    { "opponent": "Royal Bay Secondary, BC",       "slug": "royal_bay_bc",        "name": "Royal Bay Secondary",       "state": "BC", "occurrences": 3 },
+    { "opponent": "Woodinville, WA",               "slug": "woodinville_wa",      "name": "Woodinville",               "state": "WA", "occurrences": 2 },
+    { "opponent": "Palo Verde, NV",                "slug": "palo_verde_nv",       "name": "Palo Verde",                "state": "NV", "occurrences": 2 },
+    { "opponent": "Nanaimo HS, Canada",            "slug": "nanaimo_bc",          "name": "Nanaimo",                   "state": "BC", "occurrences": 2 },
+    { "opponent": "Mountain View, WA",             "slug": "mountain_view_wa",    "name": "Mountain View (WA)",        "state": "WA", "occurrences": 2, "_note": "NOT Oregon mt_view — WA school, slug kept distinct to avoid collision" },
+    { "opponent": "Timberline, ID",                "slug": "timberline_id",       "name": "Timberline",                "state": "ID", "occurrences": 1 },
+    { "opponent": "St Georges, RI",                "slug": "st_georges_ri",       "name": "St. George's School",       "state": "RI", "occurrences": 1 },
+    { "opponent": "Seattle Prep, WA",              "slug": "seattle_prep_wa",     "name": "Seattle Prep",              "state": "WA", "occurrences": 1 },
+    { "opponent": "Rocky Mountain HS, ID",         "slug": "rocky_mountain_id",   "name": "Rocky Mountain",            "state": "ID", "occurrences": 1 },
+    { "opponent": "Richland HS, WA",               "slug": "richland_wa",         "name": "Richland",                  "state": "WA", "occurrences": 1 },
+    { "opponent": "Pinnacle HS, AZ",               "slug": "pinnacle_az",         "name": "Pinnacle",                  "state": "AZ", "occurrences": 1 },
+    { "opponent": "Owyhee, ID",                    "slug": "owyhee_id",           "name": "Owyhee",                    "state": "ID", "occurrences": 1 },
+    { "opponent": "North Creek, WA",               "slug": "north_creek_wa",      "name": "North Creek",               "state": "WA", "occurrences": 1 },
+    { "opponent": "Mount Si, WA",                  "slug": "mount_si_wa",         "name": "Mount Si",                  "state": "WA", "occurrences": 1 },
+    { "opponent": "Issaquah, WA",                  "slug": "issaquah_wa",         "name": "Issaquah",                  "state": "WA", "occurrences": 1 },
+    { "opponent": "Hackley School, NY",            "slug": "hackley_ny",          "name": "Hackley School",            "state": "NY", "occurrences": 1 },
+    { "opponent": "Glacier Peak HS, WA",           "slug": "glacier_peak_wa",     "name": "Glacier Peak",              "state": "WA", "occurrences": 1 },
+    { "opponent": "Faith Lutheran, NV",            "slug": "faith_lutheran_nv",   "name": "Faith Lutheran",            "state": "NV", "occurrences": 1 },
+    { "opponent": "Emmett, ID",                    "slug": "emmett_id",           "name": "Emmett",                    "state": "ID", "occurrences": 1 },
+    { "opponent": "Eastlake, WA",                  "slug": "eastlake_wa",         "name": "Eastlake",                  "state": "WA", "occurrences": 1 },
+    { "opponent": "Community School of Naples, FL","slug": "naples_fl",           "name": "Community School of Naples","state": "FL", "occurrences": 1 },
+    { "opponent": "Claremont, Canada",             "slug": "claremont_bc",        "name": "Claremont Secondary",       "state": "BC", "occurrences": 1 },
+    { "opponent": "Brophy Prep, AZ",               "slug": "brophy_az",           "name": "Brophy College Prep",       "state": "AZ", "occurrences": 1 },
+    { "opponent": "Bothell HS, WA",                "slug": "bothell_wa",          "name": "Bothell",                   "state": "WA", "occurrences": 1 },
+    { "opponent": "Bishop Blanchet High School",   "slug": "bishop_blanchet_wa",  "name": "Bishop Blanchet",           "state": "WA", "occurrences": 1, "_note": "No state suffix in source string — Seattle WA school" },
+    { "opponent": "Bellarmine Prep, WA",           "slug": "bellarmine_wa",       "name": "Bellarmine Prep",           "state": "WA", "occurrences": 1 },
+    { "opponent": "Bainbridge Is, WA",             "slug": "bainbridge_island_wa","name": "Bainbridge Island",         "state": "WA", "occurrences": 1 }
+  ],
+  "exclude_from_backfill": [
+    { "opponent": "Team Place Holder", "occurrences": 9, "reason": "OHSLA TBD placeholder rows (likely pre-seeded playoff slots) — verify none carry scores before excluding in C" }
+  ]
+}

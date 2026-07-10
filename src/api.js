@@ -7,6 +7,26 @@ const PORT = parseInt(process.env.PORT || '3000');
 
 app.use(express.json());
 
+// ─── /api/v2 — Phase 3 schema (runbook E1) ──────────────────────────────────
+app.use('/api/v2', require('./api-v2'));
+
+// ─── v1 deprecation headers (runbook E4 / E5.5 — env-gated, no redeploy) ────
+// E4:   set V1_DEPRECATION_WARNING=true   (Warning: 299 only)
+// E5.5: set V1_SUNSET_DATE="Thu, 08 Oct 2026 00:00:00 GMT" (adds Sunset header)
+// Scoped to v1 only: /api/v2 is mounted above, so this middleware never sees it.
+app.use('/api', (req, res, next) => {
+  if (process.env.V1_DEPRECATION_WARNING === 'true') {
+    const sunset = process.env.V1_SUNSET_DATE;
+    if (sunset) {
+      res.set('Sunset', sunset);
+      res.set('Warning', `299 - "This endpoint is deprecated. Migrate to /api/v2/. Sunset: ${sunset}."`);
+    } else {
+      res.set('Warning', '299 - "This endpoint is deprecated. Migrate to /api/v2/. A Sunset date will be added after client migration is confirmed complete."');
+    }
+  }
+  next();
+});
+
 // ─── GET /health ─────────────────────────────────────────────────────────────
 
 app.get('/health', async (req, res) => {
