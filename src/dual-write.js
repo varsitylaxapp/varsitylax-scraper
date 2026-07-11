@@ -13,6 +13,17 @@ const PLACEHOLDER_OPPONENT = 'Team Place Holder';
 
 function norm(s) { return String(s || '').trim().toLowerCase(); }
 
+// "4:30pm" + "2026-04-19" -> "2026-04-19 16:30:00" (naive Pacific, like the source).
+// Returns null for missing/unparseable times (TBD games).
+function parseGameDatetime(date, time) {
+  if (!time) return null;
+  const m = String(time).trim().match(/^(\d{1,2}):(\d{2})\s*(am|pm)$/i);
+  if (!m) return null;
+  let h = parseInt(m[1], 10) % 12;
+  if (m[3].toLowerCase() === 'pm') h += 12;
+  return `${date} ${String(h).padStart(2, '0')}:${m[2]}:00`;
+}
+
 // ── Alias map: alias_normalized -> { teamId, slug, venueId, state } ──
 async function loadAliasMap() {
   const [rows] = await db.execute(
@@ -50,7 +61,8 @@ async function writeGames(scrapedGames, source = 'ohsla') {
     const awaySide = g.isHome ? opp : our;
     const row = {
       season: g.season, homeId: homeSide.teamId, awayId: awaySide.teamId,
-      date: g.date, venueId: homeSide.venueId || null,
+      date: g.date, datetime: parseGameDatetime(g.date, g.time),
+      venueId: homeSide.venueId || null,
       isConference: g.isConference ? 1 : 0, isOvertime: g.isOT ? 1 : 0,
       homeScore: g.isHome ? g.teamScore : g.oppScore,
       awayScore: g.isHome ? g.oppScore : g.teamScore,
@@ -80,26 +92,27 @@ async function writeGames(scrapedGames, source = 'ohsla') {
     let gameId;
     if (reversed) {
       await db.execute(
-        `UPDATE games SET home_team_id = ?, away_team_id = ?, venue_id = ?,
+        `UPDATE games SET home_team_id = ?, away_team_id = ?, game_datetime = ?, venue_id = ?,
            is_conference = ?, is_overtime = ?, home_score = ?, away_score = ?,
            status = ?, canonical_source = ?, source_updated_at = NOW()
          WHERE id = ?`,
-        [m.homeId, m.awayId, m.venueId, m.isConference, m.isOvertime,
+        [m.homeId, m.awayId, m.datetime, m.venueId, m.isConference, m.isOvertime,
          m.homeScore, m.awayScore, status, source, reversed.id]);
       gameId = reversed.id;
     } else {
       const [r] = await db.execute(
-        `INSERT INTO games (season, home_team_id, away_team_id, game_date, venue_id,
+        `INSERT INTO games (season, home_team_id, away_team_id, game_date, game_datetime, venue_id,
            is_conference, is_overtime, is_scrimmage, home_score, away_score,
            status, canonical_source, source_updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, NOW())
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, NOW())
          ON DUPLICATE KEY UPDATE
+           game_datetime = VALUES(game_datetime),
            venue_id = VALUES(venue_id), is_conference = VALUES(is_conference),
            is_overtime = VALUES(is_overtime), home_score = VALUES(home_score),
            away_score = VALUES(away_score), status = VALUES(status),
            canonical_source = VALUES(canonical_source), source_updated_at = NOW(),
            id = LAST_INSERT_ID(id)`,
-        [m.season, m.homeId, m.awayId, m.date, m.venueId,
+        [m.season, m.homeId, m.awayId, m.date, m.datetime, m.venueId,
          m.isConference, m.isOvertime, m.homeScore, m.awayScore, status, source]);
       gameId = r.insertId;
     }
