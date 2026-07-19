@@ -58,6 +58,22 @@ function gameJson(r) {
   };
 }
 
+// Serialize a DB DATETIME with its real Pacific offset instead of a mislabeled Z.
+// The DB server stores Pacific wall-clock times; the Railway container runs UTC,
+// so mysql2 parses those wall times into the Date's UTC fields. toISOString()
+// therefore emits the correct wall time but wrongly suffixes it with "Z".
+// Here we keep the wall time and append the actual offset (-07:00 PDT / -08:00 PST).
+function pacificISO(d) {
+  if (!d) return null;
+  const wall = d.toISOString().slice(0, 19); // YYYY-MM-DDTHH:mm:ss (Pacific wall time)
+  const tzName = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Los_Angeles', timeZoneName: 'shortOffset',
+  }).formatToParts(new Date(wall + 'Z')).find(p => p.type === 'timeZoneName').value; // "GMT-7"
+  const m = tzName.match(/GMT([+-])(\d+)(?::(\d+))?/);
+  if (!m) return `${wall}-08:00`; // defensive fallback
+  return `${wall}${m[1]}${m[2].padStart(2, '0')}:${m[3] || '00'}`;
+}
+
 // ── GET /api/v2/health ───────────────────────────────────────────────────────
 router.get('/health', async (req, res) => {
   try {
@@ -65,7 +81,11 @@ router.get('/health', async (req, res) => {
       `SELECT MAX(scraped_at) AS lastGameWrite FROM game_source_records WHERE source != 'backfill'`);
     const [[snap]] = await db.execute(
       `SELECT MAX(captured_at) AS lastSnapshot FROM rankings_snapshots`);
-    res.json({ status: 'ok', schema: 'v2', lastGameWrite: gsr.lastGameWrite, lastSnapshot: snap.lastSnapshot });
+    res.json({
+      status: 'ok', schema: 'v2',
+      lastGameWrite: pacificISO(gsr.lastGameWrite),
+      lastSnapshot: pacificISO(snap.lastSnapshot),
+    });
   } catch (err) { res.status(500).json({ status: 'error', message: err.message }); }
 });
 

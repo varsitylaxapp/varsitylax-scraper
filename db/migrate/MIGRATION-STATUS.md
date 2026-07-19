@@ -1,6 +1,54 @@
 # Phase 3 Migration Status
 
-Last updated: 2026-07-10 (end of session)
+Last updated: 2026-07-19
+
+## Incident 2026-07-19 — custom domain down, cert stuck "Issuing TLS certificate" (RESOLVED)
+
+RESOLVED 2026-07-19: removed + re-added the domain on varsitylax-api. Railway issued a
+**new CNAME target** (`3czytx5k.up.railway.app`, was `uy4d6yu2`) and required the
+`_railway-verify.api` TXT (already present from Jul 11 setup, token unchanged). Updated
+the CNAME at DreamHost → domain validated, cert issued, and
+https://api.varsitylaxapp.com/api/v2/health returns ok (lastGameWrite 2026-07-19 15:05).
+Lesson: a Railway domain re-add rotates the CNAME target — always check DNS records shown
+in the domain dialog. Original details below.
+
+`api.varsitylaxapp.com` (v2 primary host) is unreachable — Railway service settings show
+the domain stuck on "Issuing TLS certificate". DNS verified clean via dns.google:
+CNAME api → uy4d6yu2.up.railway.app → Railway edge 69.46.46.97; no CAA records; DreamHost
+SOA serial 2026071101 (zone untouched since Jul 11 setup) → problem is on Railway's side.
+Worked as recently as Jul 16 17:54 PDT (E7 Check 3 evidence). Service itself is Online and
+serving fine on bountiful-youth-production-5bf0.up.railway.app.
+
+Impact: v1.6.0 clients can't reach v2 → **v1 fallback engaged in production and worked**
+(Spencer's weekend usage appears in HTTP logs as v1 GETs incl. /api/schedule/playoffs and
+team paths; zero v2 hits since Jul 16). Fallback serves frozen-at-Jul-15 v1 data — benign
+in offseason (data static). Sunset headers unaffected.
+
+Consequences: (a) weekend traffic is NOT evidence about v1.6.0 v2-adoption — it's
+fallback traffic; (b) E7 Check 5 clock cannot start until the domain is fixed; (c) real-
+world proof the E5 Option C fallback works.
+
+Fix path: remove + re-add the custom domain in Railway → varsitylax-api → Settings →
+Networking to re-trigger issuance (domain already down, nothing to lose), or Railway
+support if it sticks again. Verify with https://api.varsitylaxapp.com/api/v2/health.
+
+## Incident 2026-07-12/13 — dual-write silently reverted to legacy (RESOLVED)
+
+Monitor flagged E2 NO-GO on 2026-07-13: no v2 writes since Jul 11. Root cause:
+`WRITE_MODE` was **absent** from the varsitylax-cron service variables on Railway
+(only DB_* + SEASON present) — the Jul 11 GitHub redeploy ran without it, so every
+cron run since defaulted to legacy-only. The E2 dual runs verified Jul 10–11
+evidently didn't persist the variable to the cron service's environment.
+
+Fix (2026-07-13 ~08:00 PDT): added `WRITE_MODE=dual` to varsitylax-cron via Raw
+Editor, deployed, triggered manual run. Note: the first Run now (07:54) still ran
+legacy — it landed on the old deployment before the variable redeploy activated.
+Second run (08:03) confirmed in logs: `Starting scrape run (WRITE_MODE=dual)`,
+LaxNumbers/LaxPower v2 snapshots hash-deduped (unchanged), and
+`[OHSLA] ✓ v2: 354 matchups upserted, 0 stale pruned` at 08:06.
+
+Lesson for E4/E5.5/E6: after any Railway variable change, verify the redeploy is
+ACTIVE before triggering a run, and check the startup WRITE_MODE log line.
 
 ## Complete
 
@@ -14,20 +62,64 @@ Last updated: 2026-07-10 (end of session)
 
 ## In progress — clock gates
 
-- **E3**: 3 clean daily monitor runs spanning ≥48h. Day 1 = 2026-07-10 (2 clean runs).
-  Run `node db/migrate/section-e-monitor.js` after each daily scrape; log auto-appends
-  to `out/section-e-tracking.md`.
+- **E3** — ✅ CLOSED 2026-07-13: clean runs 2026-07-10 (×2) + 2026-07-13 (all four
+  checks GO after dual-write fix), spanning >48h. Log: `out/section-e-tracking.md`.
+- **E4** — ✅ DONE 2026-07-13: `V1_DEPRECATION_WARNING=true` set on varsitylax-api
+  via Raw Editor, deployed, service Online.
 
 ## Remaining
 
 | Step | Action | Gate |
 |---|---|---|
-| E4 | Railway: `V1_DEPRECATION_WARNING=true` | after E3 (≥2026-07-12) |
-| E5 | iOS: v2 DataService + **v2→v1 fallback (hard prereq)**, new `Config.apiBaseURL`; App Store release | fallback verified on broken-URL test build |
-| E5.5 | Railway: `V1_SUNSET_DATE` = E5 date + 90 days | after E5 confirmed |
-| E6 | Railway: `WRITE_MODE=v2` | ≥24h stable after E5 |
-| E7 | Sign-off checks | ≥24h after E6; v1 traffic <1% of v2 for 7 days |
+| E5 | ✅ DONE — **v1.6.0 live on App Store, confirmed 2026-07-13** (submitted 2026-07-11, auto-release). Fallback verified 2026-07-10 (simulator vs /api/v2-broken/: all tabs correct, v1 fallback succeeded on every fetch) | complete |
+| E5.5 | ✅ DONE 2026-07-13 — `V1_SUNSET_DATE="Sun, 11 Oct 2026 00:00:00 GMT"` (2026-07-13 + 90d) set on varsitylax-api | complete |
+| E6 | ✅ DONE 2026-07-14 ~17:50 PDT — `WRITE_MODE=v2` set on varsitylax-cron (Raw Editor), redeploy verified ACTIVE before triggering. Manual run 17:55 PDT: startup log `Starting scrape run (WRITE_MODE=v2)`; v2-only writes confirmed — LaxNumbers/LaxPower snapshots hash-deduped, `[OHSLA] ✓ v2: 354 matchups upserted, 0 stale pruned`, zero legacy write lines. /api/v2/health lastGameWrite matches run. (Note: health serializes timestamps as `Z` but values look like PDT — cosmetic, worth a look before E7.) | complete |
+| E7 | ⏳ PARTIAL 2026-07-16 — Checks 1–4 all GO (run ~17:54 DB clock via Railway console on varsitylax-api container): Check 1 live_source_records_today=354; Check 2 missing_canonical=0; Check 3 v2 rankings + schedule/all returning full data over custom domain (datetime populated); Check 4 legacy frozen — laxnumbers_rankings 2026-07-15 00:04:00, team_schedules 2026-07-15 00:04:39 (~42h, both pre-E6-flip, DB NOW 2026-07-16 17:54). **Check 5 NOT MET — blocks sign-off, see below.** | ≥24h after E6 ✅; v1 traffic <1% of v2 for 7 days ❌ |
 | F | Drop `*_v1`… actually legacy tables (`team_schedules` etc.) after Sunset date | ~Oct 2026 |
+
+## E7 Check 5 findings (2026-07-16, Railway HTTP logs, deployment since Jul 13 08:42 PDT)
+
+v1 traffic is currently **far above** 1% of v2 — the 7-day clock has not started:
+
+1. **Uptime monitor on v1**: `HEAD /api/rankings/laxnumbers` every ~5 min around the clock
+   (~288 req/day, matches UptimeRobot's default HEAD+5min pattern). This alone swamps the
+   ratio. → ACTION (Spencer): repoint the monitor to `/api/v2/health` (or a v2 route). The
+   gate can't start until this is moved or explicitly excluded from the count.
+2. **Old-client GETs on v1**: bursts of `GET /api/rankings/laxnumbers` + `/api/schedule/all`
+   (mix of 200/304), roughly 10–30/day on Jul 15–16 — classic pre-1.6.0 app-launch fetch
+   pattern. Expected decay as users update; sunset headers are doing their job.
+3. **Zero v2 client traffic since Jul 13**: no hits at all on `/api/v2/rankings/*`,
+   `/api/v2/schedule/all`, or `/api/v2/teams` (only daily `/api/v2/health` checks). Could be
+   off-season quiet, but combined with (2) it's worth verifying in App Store Connect that
+   v1.6.0 is actually released/propagating before trusting the traffic ratio.
+
+Once the monitor is repointed and the first day of v1 <1% of v2 is observed, record that
+date as the Check 5 threshold date; sign-off is 7 consecutive clean days later.
+
+UPDATE 2026-07-19: after the domain fix, v2 client traffic confirmed — multiple
+`GET /api/v2/rankings/laxnumbers` (200/304) at 16:22 PDT from Spencer's phones. v1.6.0 →
+v2 path verified end-to-end in production.
+
+**Check 5 gate AMENDED (approved by Spencer 2026-07-19):** the literal "v1 <1% of v2 for
+7 days" is unattainable off-season (old-client v1 GETs ~10-30/day vs light v2 volume;
+would need >1-3k v2 req/day). Amended gate: **zero monitor/synthetic traffic on v1 routes
+AND old-client v1 GETs declining (or flat-low) for 7 consecutive days.** Rationale: v1
+stragglers are auto-updating installs served by deprecation+sunset headers until the
+Oct 11 sunset; they cannot be forced off v2-side.
+
+**Clock started 2026-07-19 ~16:45 PDT:** UptimeRobot monitor (the only monitor, account
+support@varsitylaxapp.com) repointed from
+`bountiful-youth-…railway.app/api/rankings/laxnumbers` (HEAD, 5min) to
+`https://api.varsitylaxapp.com/api/v2/health` and renamed "VarsityLax v2 health". Bonus:
+it now watches the custom domain, so a repeat of today's cert incident alerts within 5min.
+First full clean day = Jul 20 → E7 sign-off eligible **2026-07-26** if daily checks stay
+clean.
+
+### Check 5 daily log (amended gate)
+
+| Date | v1 monitor HEADs | v1 old-client GETs | v2 traffic | Clean? |
+|---|---|---|---|---|
+| Jul 19 (day 0) | last at 16:31:56 PDT (pre-repoint); v2/health HEADs flowing after | ~15-25 (incl. pre-fix fallback bursts) | health ok; client GETs 16:22 | baseline |
 
 ## Session E env knobs (already deployed, all default-off)
 
@@ -52,10 +144,18 @@ Spencer's checklist before E5:
 3. Fallback test: set `forceBrokenV2ForFallbackTest = true`, run in simulator,
    verify all tabs show data + console shows "v1 fallback succeeded". Set back
    to false. Record result in runbook E5 prerequisite line.
-4. DECISION — custom domain: configure api.varsitylaxapp.com in Railway +
-   DNS CNAME, then change `Config.apiHost` before shipping. Strongly
-   recommended: this is the last cheap chance to unpin from the Railway URL.
-5. TestFlight → App Store review → release = E5 executes.
+4. Custom domain — ✅ LIVE 2026-07-11: https://api.varsitylaxapp.com serving
+   v2 over valid TLS (CNAME api -> uy4d6yu2.up.railway.app at DreamHost;
+   the empty api.varsitylaxapp.com hosted-site shell was set to No Web
+   Hosting to clear conflicting auto A records). Config.swift: v2 primary on
+   custom domain, v1 fallback deliberately kept on the Railway URL as an
+   independent host (covers domain DNS/cert failure too).
+5. ✅ DONE 2026-07-11: TestFlight upload successful as version 1.6.0;
+   submitted to App Store review. **App Store release = E5 executes.**
+   On release day: record the E5 timestamp here, set V1_SUNSET_DATE on
+   Railway to release + 90 days (E5.5), then after 24h stable flip
+   WRITE_MODE=v2 (E6). E4 (V1_DEPRECATION_WARNING=true) can flip as soon
+   as E3's third clean run lands (~2026-07-12).
 
 ## Strategic notes for the iOS session
 
