@@ -61,6 +61,9 @@ function runScrape() {
   console.log(`target: ${db.targetDescription}`);
   console.log(`WRITE_MODE=${process.env.WRITE_MODE || 'legacy'}  SEASON=${process.env.SEASON}\n`);
 
+  const [[{ maxLogId }]] = await db.execute('SELECT COALESCE(MAX(id),0) AS maxLogId FROM scrape_log');
+  const [[{ wlBefore }]] = await db.execute(
+    'SELECT COALESCE(MAX(wl_computed_at), \'1970-01-01\') AS wlBefore FROM team_seasons');
   const before = await counts();
   const hashBefore = await snapshotHashes();
   console.log('--- row counts BEFORE ---');
@@ -94,6 +97,32 @@ function runScrape() {
     'scrape_log grew (scrape actually ran)',
     deltas.scrape_log > 0,
     `+${deltas.scrape_log} rows`,
+  ]);
+
+  // CHECK 1b — THE important one. Row counts alone let a source fail silently:
+  // the 2026-07-27 run passed all checks while OHSLA errored on a view definer.
+  // Assert status, never just counts.
+  const [logRows] = await db.execute(
+    'SELECT source, state, status, error_message FROM scrape_log WHERE id > ?', [maxLogId]);
+  const failed = logRows.filter(r => r.status !== 'success');
+  results.push([
+    'every scrape_log row written this run is success',
+    logRows.length > 0 && failed.length === 0,
+    failed.length ? failed.map(r => `${r.source}/${r.state}: ${r.error_message}`).join(' | ')
+                  : `${logRows.length} rows, all success`,
+  ]);
+
+  // CHECK 1c — refreshWinLoss() must actually complete. It reads
+  // v_team_season_record, which is what the definer bug broke; W-L silently
+  // stopped being recomputed while every count check still passed.
+  const [[{ wlAfter }]] = await db.execute(
+    'SELECT COALESCE(MAX(wl_computed_at), \'1970-01-01\') AS wlAfter FROM team_seasons');
+  const [[{ nullWl }]] = await db.execute(
+    'SELECT COUNT(*) AS nullWl FROM team_seasons WHERE season = 2026 AND wl_computed_at IS NULL');
+  results.push([
+    'refreshWinLoss completed (team_seasons W-L recomputed)',
+    new Date(wlAfter) > new Date(wlBefore) && nullWl === 0,
+    `wl_computed_at ${wlBefore} -> ${wlAfter}, ${nullWl} rows still NULL`,
   ]);
 
   // CHECK 2 — duplicate games, both exact and mirrored orientation.

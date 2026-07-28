@@ -8,11 +8,14 @@
 const crypto = require('crypto');
 const db = require('./db');
 const { DEFAULT_STATE } = require('./config/states');
+const { normalizeAlias } = require('./normalize');
 
 const SEASON = parseInt(process.env.SEASON || '2026');
 const PLACEHOLDER_OPPONENT = 'Team Place Holder';
 
-function norm(s) { return String(s || '').trim().toLowerCase(); }
+// Delegates to the single shared definition — see src/normalize.js. Do not
+// reimplement: it must match the SQL generated column exactly.
+const norm = normalizeAlias;
 
 // "4:30pm" + "2026-04-19" -> "2026-04-19 16:30:00" (naive Pacific, like the source).
 // Returns null for missing/unparseable times (TBD games).
@@ -170,9 +173,19 @@ async function writeGames(scrapedGames, source = 'ohsla') {
        FROM games
        WHERE season = ? AND status = 'scheduled'
          AND home_score IS NULL AND away_score IS NULL
-         AND (canonical_source IS NULL OR canonical_source = ?)
+         -- SOURCE-SCOPED. A source may prune only what it owns, plus unclaimed
+         -- rows that NO OTHER source has provenance for. The previous
+         -- "canonical_source IS NULL" clause was a hole: once a second source
+         -- writes games (WHSBLA, 2026-07-28), an OHSLA reschedule could delete
+         -- a WHSBLA row that merely happened to have a NULL canonical_source.
+         -- Verified by exploit test: the old predicate matched such a row, this
+         -- one does not.
+         AND (canonical_source = ?
+              OR (canonical_source IS NULL AND NOT EXISTS (
+                    SELECT 1 FROM game_source_records gsr
+                     WHERE gsr.game_id = games.id AND gsr.source <> ?)))
          AND (home_team_id IN (${ph}) OR away_team_id IN (${ph}))`,
-      [SEASON, source, ...ids, ...ids]);
+      [SEASON, source, source, ...ids, ...ids]);
     const stale = candidates.filter(c =>
       !feedKeys.has(`${Math.min(c.h, c.a)}|${Math.max(c.h, c.a)}|${c.d}`));
 
