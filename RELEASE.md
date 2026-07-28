@@ -1,8 +1,10 @@
 # Release plan — Phase F multi-state schema
 
-**Status: DRAFT for review. No push has occurred. No prod migration has occurred.**
+**Status: APPROVED. Stage (a) PASSED 2026-07-28. All pre-flight items closed.
+Awaiting Spencer's window announcement. No push has occurred. No prod migration
+has occurred.**
 
-Twelve-plus commits sit unpushed on `main`. This is one **coupled** release: the
+Sixteen commits sit unpushed on `main`. This is one **coupled** release: the
 code at HEAD requires the Section F, F2, F3, F4 and G schema, and the schema is inert without the code.
 Pushing alone would deploy migration-dependent code against an unmigrated prod
 database. Sequencing is the whole point of this document.
@@ -90,6 +92,33 @@ Nothing in the DDL is 9.x-only, but "runs clean on 9.4" is not proof for 8.0.41.
 
 **Gate: do not proceed to (b) until every step passes.**
 
+### ✅ Stage (a) result — 2026-07-28
+
+Executed on a from-scratch `mysql:8.0.41` Docker service, no volume attached
+(so the datadir hazard above could not apply). TCP proxy created via the
+GraphQL API, since the CLI exposes no TCP command. Service deleted afterwards.
+
+```
+SELECT VERSION()                       8.0.41   (verified BEFORE any restore)
+dump 475,373 B, 1 DEFINER -> stripped  restore exit 0, view readable (70 rows)
+f -> f2 -> f3 -> f4 -> g               all five exit 0, no stderr
+W-L checksum across the view swap      f3f91c6319107224 -> f3f91c6319107224
+alias collisions / state drift         0 / 0
+ERROR 1364 reproduced on 8.0.41        both tables; new code with state: OK
+sql_mode                               STRICT present, matches prod
+95/95 capture diff vs 9.4.0 baseline   93 identical, 2 differ (health timestamps)
+byte totals                            636,979 == 636,979
+capture determinism (run twice)        identical
+```
+
+**MySQL 8.0.41 and 9.4.0 produce byte-identical Oregon output from the same prod
+snapshot.** The version gap is closed with evidence.
+
+The first capture attempt was discarded: an inline rewrite of the harness
+dropped the readiness `sleep`, so it raced and collected 86/95, and renamed
+output files made the diff meaningless. Harness bugs, not migration problems —
+redone with the real `capture.sh`, and only the redone numbers count.
+
 ---
 
 ## Stage (b) — production window
@@ -130,12 +159,10 @@ UptimeRobot pings `/api/rankings/laxnumbers` every 5 minutes as the pre-warm
 mechanism (shipped with v1.6.0). The step-6 redeploy replaces the API container,
 so one ping may land during the restart.
 
-**Not verified by me — check before the window opens:** UptimeRobot's alert
-threshold for that monitor. If it is set to alert on a *single* failed check,
-a routine deploy will page. If it requires 2+ consecutive failures, a ~30-60s
-restart between 5-minute pings will almost certainly pass unnoticed. I have no
-access to that dashboard, so this is a pre-flight item for Spencer, not a
-confirmed fact.
+**CLOSED BY RULING, 2026-07-28 (Spencer).** Free plan; the alert threshold is
+unverified and that is accepted. A page during step 6 is **anticipated and
+ignorable**. It was never verified — recorded as a decision, not as a fact, so
+nobody later mistakes it for something that was checked.
 
 Either way: **announce the window before starting**, so an alert mid-window
 reads as expected. And note the pre-warm ping itself will re-warm the pool on
@@ -176,7 +203,7 @@ Shipping (b) without (c) is the low-risk path and is recommended.
 
 ## Pre-flight checklist
 
-- [ ] Stage (a) rehearsal passed on `mysql:8.0`
+- [x] **2026-07-28** — Stage (a) rehearsal PASSED on `mysql:8.0.41` (see above)
 - [ ] Fresh prod dump taken and verified restorable
 - [ ] Prod baseline captured with `scripts/capture.sh`
 - [ ] Cron stop/restart procedure confirmed in the Railway dashboard
@@ -185,9 +212,9 @@ Shipping (b) without (c) is the low-risk path and is recommended.
       would refuse a staging target whose host matches `DB_HOST`, but absent is
       cleaner than guarded.
 - [ ] Someone is watching the first post-deploy cron cycle
-- [ ] UptimeRobot alert threshold checked (see "Monitoring during the window")
+- [x] **2026-07-28 (Spencer, by ruling)** — UptimeRobot: CLOSED. Free plan; threshold unverified and accepted. A page during step 6 is anticipated and ignorable. Proceed with the cron-pause plan as written.
 - [ ] Window announced before it opens
-- [ ] Rehearsal instance verified at `SELECT VERSION()` = 8.0.41 before restore
+- [x] **2026-07-28** — rehearsal instance verified at `SELECT VERSION()` = 8.0.41 before restore; service deleted after capture
 
 ## Deliberately NOT in this release
 
@@ -198,4 +225,11 @@ Shipping (b) without (c) is the low-risk path and is recommended.
 - Same-day doubleheader / rematch `uq_game` gap — design-together item
 - League/division standings view — blocked on WHSBLA groupings
 - Per-state pre-warm coverage — a per-state **launch** gate, not an ingestion one
+- `postgres-volume` cleanup — orphaned 134 MB volume from the mistaken Postgres
+  service. `volumeDelete` returns `true` and does nothing (twice); schema
+  introspection shows it is the only deletion mutation, so the stranded
+  `volumeInstance f059f6b4-398f-4100-9122-14725283eb5d` is the likely blocker.
+  Dashboard deletion by Spencer; Railway support ticket if it survives that.
+  **Not a release blocker** — unattached, and it touches nothing this release
+  uses.
 - 2027 Sportability 10-day recent-scores polling
