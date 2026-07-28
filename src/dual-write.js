@@ -7,6 +7,7 @@
 // joins across the legacy/new collation boundary (see docs/data-quirks.md).
 const crypto = require('crypto');
 const db = require('./db');
+const { DEFAULT_STATE } = require('./config/states');
 
 const SEASON = parseInt(process.env.SEASON || '2026');
 const PLACEHOLDER_OPPONENT = 'Team Place Holder';
@@ -25,21 +26,28 @@ function parseGameDatetime(date, time) {
 }
 
 // ── Alias map: alias_normalized -> { teamId, slug, venueId, state } ──
-async function loadAliasMap() {
+// state omitted  -> every team, all states. Required by writeGames: an OHSLA
+//                   schedule legitimately names out-of-state opponents.
+// state supplied -> that state only. Required by writeRankings: a state's feed
+//                   lists its teams under bare names, and bare names collide
+//                   across states ("Mountain View" is both an Oregon alias for
+//                   mt_view and a real WA school).
+async function loadAliasMap(state) {
   const [rows] = await db.execute(
     `SELECT ta.alias_normalized AS a, t.id AS teamId, t.slug, t.home_venue_id AS venueId, t.state
-     FROM team_aliases ta JOIN teams t ON t.id = ta.team_id`);
+     FROM team_aliases ta JOIN teams t ON t.id = ta.team_id
+     ${state ? 'WHERE t.state = ?' : ''}`, state ? [state] : []);
   const map = new Map();
   for (const r of rows) map.set(r.a, r);
   return map;
 }
 
-async function logUnresolved(rawName, source, context) {
+async function logUnresolved(rawName, source, context, state = DEFAULT_STATE) {
   await db.execute(
-    `INSERT INTO unresolved_aliases (raw_name, source, context, occurrence_count)
-     VALUES (?, ?, ?, 1)
+    `INSERT INTO unresolved_aliases (raw_name, source, state, context, occurrence_count)
+     VALUES (?, ?, ?, ?, 1)
      ON DUPLICATE KEY UPDATE occurrence_count = occurrence_count + 1, context = VALUES(context)`,
-    [rawName, source, context ? context.slice(0, 256) : null]);
+    [rawName, source, state, context ? context.slice(0, 256) : null]);
 }
 
 // ── Games: per-team perspective rows -> neutral matchup upserts ──────────────
@@ -188,15 +196,15 @@ async function writeGames(scrapedGames, source = 'ohsla') {
 
 // ── Rankings: snapshot (hash-deduped) + entries ──────────────────────────────
 // Returns { snapshotId|null (null = unchanged, skipped), entries, unresolved }
-async function writeRankings(source, rankings) {
-  const aliases = await loadAliasMap();
+async function writeRankings(source, rankings, state = DEFAULT_STATE) {
+  const aliases = await loadAliasMap(state);
   const season = rankings[0]?.season || SEASON;
 
   const resolved = [];
   const unresolved = [];
   for (const r of rankings) {
     const hit = aliases.get(norm(r.teamName));
-    if (!hit) { unresolved.push(r.teamName); await logUnresolved(r.teamName, source, `rankings, season ${season}`); continue; }
+    if (!hit) { unresolved.push(r.teamName); await logUnresolved(r.teamName, source, `rankings, season ${season}`, state); continue; }
     resolved.push({ ...r, teamId: hit.teamId });
   }
 
@@ -207,14 +215,15 @@ async function writeRankings(source, rankings) {
 
   const [[latest]] = await db.execute(
     `SELECT id, content_hash FROM rankings_snapshots
-     WHERE source = ? AND season = ? ORDER BY captured_at DESC LIMIT 1`, [source, season]);
+     WHERE source = ? AND season = ? AND state = ? ORDER BY captured_at DESC LIMIT 1`, [source, season, state]);
   if (latest && latest.content_hash === hash) {
     return { snapshotId: null, entries: 0, unresolved };
   }
 
   const [snap] = await db.execute(
-    `INSERT INTO rankings_snapshots (source, season, captured_at, content_hash) VALUES (?, ?, NOW(), ?)`,
-    [source, season, hash]);
+    `INSERT INTO rankings_snapshots (source, state, season, captured_at, content_hash)
+     VALUES (?, ?, ?, NOW(), ?)`,
+    [source, state, season, hash]);
   const snapshotId = snap.insertId;
 
   // Source duplicates (e.g. laxpower double-listing) absorbed by PK — keep first-listed.

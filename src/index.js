@@ -5,6 +5,7 @@ const { scrapeLaxNumbers } = require('./scrapers/laxnumbers');
 const { scrapeLaxPower }   = require('./scrapers/laxpower');
 const { scrapeOHSLA }      = require('./scrapers/ohsla');
 const dualWrite            = require('./dual-write');
+const { enabledStates, DEFAULT_STATE } = require('./config/states');
 
 const SEASON = parseInt(process.env.SEASON || '2026');
 
@@ -69,11 +70,11 @@ async function upsertOHSLA(games) {
   }
 }
 
-async function logScrape(source, count, status, errorMessage = null) {
+async function logScrape(source, count, status, errorMessage = null, state = DEFAULT_STATE) {
   try {
     await db.execute(
-      'INSERT INTO scrape_log (source, teams_scraped, status, error_message) VALUES (?, ?, ?, ?)',
-      [source, count, status, errorMessage]
+      'INSERT INTO scrape_log (source, state, teams_scraped, status, error_message) VALUES (?, ?, ?, ?, ?)',
+      [source, state, count, status, errorMessage]
     );
   } catch (e) {
     console.error('[log] Failed to write scrape_log:', e.message);
@@ -83,23 +84,31 @@ async function logScrape(source, count, status, errorMessage = null) {
 async function runAll() {
   console.log(`\n[${new Date().toISOString()}] Starting scrape run (WRITE_MODE=${WRITE_MODE})`);
 
-  // ── LaxNumbers rankings ───────────────────────────────────────────────────
-  try {
-    const rankings = await scrapeLaxNumbers();
-    if (writeLegacy) {
-      await upsertLaxNumbers(rankings);
-      await logScrape('laxnumbers', rankings.length, 'success');
-      console.log(`[LaxNumbers] ✓ ${rankings.length} teams saved (legacy)`);
+  // ── LaxNumbers rankings — one pass per rankings-enabled state ─────────────
+  // Source strings stay byte-identical ('laxnumbers', 'laxnumbers-v2'); the new
+  // scrape_log.state column disambiguates. Only Oregon is registered today, so
+  // this loop runs exactly once and the run is unchanged.
+  for (const st of enabledStates('hasRankings')) {
+    const isDefault = st.code === DEFAULT_STATE;
+    try {
+      const rankings = await scrapeLaxNumbers(st);
+      // v1 tables have no state column and are on the Sunset path, so only
+      // Oregon is ever written there. Additional states are v2-only by design.
+      if (writeLegacy && isDefault) {
+        await upsertLaxNumbers(rankings);
+        await logScrape('laxnumbers', rankings.length, 'success', null, st.code);
+        console.log(`[LaxNumbers] ✓ ${rankings.length} teams saved (legacy)`);
+      }
+      if (writeV2) {
+        const r = await dualWrite.writeRankings('laxnumbers', rankings, st.code);
+        await logScrape('laxnumbers-v2', rankings.length, r.unresolved.length ? 'partial' : 'success',
+          r.unresolved.length ? `unresolved: ${r.unresolved.join(', ')}` : null, st.code);
+        console.log(`[LaxNumbers:${st.code}] ✓ v2: ${r.snapshotId ? r.entries + ' entries, snapshot ' + r.snapshotId : 'unchanged, snapshot skipped'}${r.unresolved.length ? ' — UNRESOLVED: ' + r.unresolved.join(', ') : ''}`);
+      }
+    } catch (err) {
+      console.error(`[LaxNumbers:${st.code}] ✗`, err.message);
+      await logScrape('laxnumbers', 0, 'error', err.message, st.code);
     }
-    if (writeV2) {
-      const r = await dualWrite.writeRankings('laxnumbers', rankings);
-      await logScrape('laxnumbers-v2', rankings.length, r.unresolved.length ? 'partial' : 'success',
-        r.unresolved.length ? `unresolved: ${r.unresolved.join(', ')}` : null);
-      console.log(`[LaxNumbers] ✓ v2: ${r.snapshotId ? r.entries + ' entries, snapshot ' + r.snapshotId : 'unchanged, snapshot skipped'}${r.unresolved.length ? ' — UNRESOLVED: ' + r.unresolved.join(', ') : ''}`);
-    }
-  } catch (err) {
-    console.error('[LaxNumbers] ✗', err.message);
-    await logScrape('laxnumbers', 0, 'error', err.message);
   }
 
   // ── LaxPower rankings ─────────────────────────────────────────────────────
