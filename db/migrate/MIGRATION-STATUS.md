@@ -1,6 +1,6 @@
 # Phase 3 Migration Status
 
-Last updated: 2026-07-19
+Last updated: 2026-07-24 17:25 PDT — **Section E ✅ APPROVED (E7 signed off; Check 5 closed early at 5/7 clean days by Spencer)**
 
 ## Incident 2026-07-19 — custom domain down, cert stuck "Issuing TLS certificate" (RESOLVED)
 
@@ -74,8 +74,8 @@ ACTIVE before triggering a run, and check the startup WRITE_MODE log line.
 | E5 | ✅ DONE — **v1.6.0 live on App Store, confirmed 2026-07-13** (submitted 2026-07-11, auto-release). Fallback verified 2026-07-10 (simulator vs /api/v2-broken/: all tabs correct, v1 fallback succeeded on every fetch) | complete |
 | E5.5 | ✅ DONE 2026-07-13 — `V1_SUNSET_DATE="Sun, 11 Oct 2026 00:00:00 GMT"` (2026-07-13 + 90d) set on varsitylax-api | complete |
 | E6 | ✅ DONE 2026-07-14 ~17:50 PDT — `WRITE_MODE=v2` set on varsitylax-cron (Raw Editor), redeploy verified ACTIVE before triggering. Manual run 17:55 PDT: startup log `Starting scrape run (WRITE_MODE=v2)`; v2-only writes confirmed — LaxNumbers/LaxPower snapshots hash-deduped, `[OHSLA] ✓ v2: 354 matchups upserted, 0 stale pruned`, zero legacy write lines. /api/v2/health lastGameWrite matches run. (Note: health serializes timestamps as `Z` but values look like PDT — cosmetic, worth a look before E7.) | complete |
-| E7 | ⏳ PARTIAL 2026-07-16 — Checks 1–4 all GO (run ~17:54 DB clock via Railway console on varsitylax-api container): Check 1 live_source_records_today=354; Check 2 missing_canonical=0; Check 3 v2 rankings + schedule/all returning full data over custom domain (datetime populated); Check 4 legacy frozen — laxnumbers_rankings 2026-07-15 00:04:00, team_schedules 2026-07-15 00:04:39 (~42h, both pre-E6-flip, DB NOW 2026-07-16 17:54). **Check 5 NOT MET — blocks sign-off, see below.** | ≥24h after E6 ✅; v1 traffic <1% of v2 for 7 days ❌ |
-| F | Drop `*_v1`… actually legacy tables (`team_schedules` etc.) after Sunset date | ~Oct 2026 |
+| E7 | ✅ APPROVED 2026-07-24 — Checks 1–4 re-verified GO via Railway console on varsitylax-api (DB NOW 2026-07-24 17:23 UTC): Check 1 live_source_records_today=354; Check 2 missing_canonical=0; Check 3 v2 rankings (41 teams) + schedule/all (354 games, datetime populated) over custom domain; Check 4 legacy frozen — laxnumbers_rankings 2026-07-15 00:04:00 UTC, team_schedules 2026-07-15 00:04:39 UTC (~9.7d). **Check 5 (amended gate) closed early at 5/7 clean days by Spencer's decision** — 5 consecutive clean days Jul 20–24, flat-zero v1 traffic; 2 remaining observation days waived. Sign-off block filled in `runbook-section-e.md`. | ✅ signed off |
+| F | Drop legacy tables (`team_schedules`, `laxnumbers_rankings`, etc.) after Sunset date | **waits for 2026-10-11 sunset** |
 
 ## E7 Check 5 findings (2026-07-16, Railway HTTP logs, deployment since Jul 13 08:42 PDT)
 
@@ -120,6 +120,20 @@ clean.
 | Date | v1 monitor HEADs | v1 old-client GETs | v2 traffic | Clean? |
 |---|---|---|---|---|
 | Jul 19 (day 0) | last at 16:31:56 PDT (pre-repoint); v2/health HEADs flowing after | ~15-25 (incl. pre-fix fallback bursts) | health ok; client GETs 16:22 | baseline |
+| Jul 19 eve (verified 17:07 PDT, automated check) | 0 since repoint — last v1 HEAD 16:31:56; v2/health HEADs every ~5min 16:27→17:07 ✓ | ~14 today (bursts 12:41/13:56/15:50, all pre-repoint; none after) | health ok, lastGameWrite 17:03; monitor HEADs + client GETs on v2 | ✓ repoint verified |
+| Jul 20 (day 1, verified ~17:10 PDT, automated check) | 0 — last v1 HEAD still Jul 19 16:31:56; v2/health HEADs every ~5min through 17:07 ✓ | **0** — last v1 rankings GET Jul 19 15:50:04; /api/schedule/all also 0 today | health ok, lastGameWrite Jul 20 17:02 (26h ✓, custom domain/TLS ✓); v2 client GETs 10:49 (/api/v2/rankings/laxnumbers ×4) | ✅ Day 1 of 7 clean |
+| Jul 21 (day 2, verified ~17:10 PDT, automated check) | 0 — last v1 HEAD still Jul 19 16:31:56; v2/health HEADs every ~5min through 17:06 ✓ | **0** — last v1 rankings GET still Jul 19 15:50:04; /api/schedule/all still Jul 19 15:50:03 | health ok, lastGameWrite Jul 21 17:02 (26h ✓, custom domain/TLS ✓); v2 client GETs 08:36 (×5, 304) + 15:13 (200) | ✅ Day 2 of 7 clean |
+| Jul 22 (day 3, verified ~11:10 PDT manual + re-verified 17:10 PDT automated full-day check) | 0 — last v1 HEAD still Jul 19 16:31:56; v2/health HEADs every ~5min through 17:04 ✓ | **0** — last v1 rankings GET still Jul 19 15:50:04; /api/schedule/all still Jul 19 15:50:03 | health ok, lastGameWrite Jul 22 17:02 (fresh ✓, custom domain/TLS ✓); v2 client GETs Jul 22 08:23 + burst 17:05 (rankings/laxnumbers, schedule/all, schedule/team/oes, schedule/playoffs) | ✅ Day 3 of 7 clean (full day verified) |
+| Jul 23 (day 4, verified ~17:10 PDT, automated check) | 0 — last v1 HEAD still Jul 19 16:31:56; v2/health HEADs every ~5min through 17:09 ✓ | **0** — last v1 rankings GET still Jul 19 15:50:04; /api/schedule/all still Jul 19 15:50:03 | health ok, lastGameWrite Jul 23 17:04 (26h ✓, custom domain/TLS ✓); v2 client GETs last Jul 22 17:05 burst (none yet today — off-season quiet, gate unaffected) | ✅ Day 4 of 7 clean |
+| Jul 24 (day 5, verified ~17:15 PDT, automated check) | 0 — last v1 HEAD still Jul 19 16:31:56 (HEAD filter list ends there, nothing newer) ✓ | **0** — last v1 rankings GET still Jul 19 15:50:04; /api/schedule/all still Jul 19 15:50:03 (both filter lists reach "start of range" and end Jul 19) | health ok, lastGameWrite Jul 24 17:03:07 (fresh ✓, custom domain/TLS ✓); v2 client GETs today Jul 24 14:52:19 (200) + 14:52:26 (304) on /api/v2/rankings/laxnumbers | ✅ Day 5 of 7 clean |
+
+**GATE CLOSED EARLY 2026-07-24 (Spencer's decision):** after 5 consecutive clean days
+(Jul 20–24) with flat-zero v1 traffic and healthy v2, Spencer elected to close the amended
+Check 5 gate rather than wait the remaining 2 days (Jul 25–26). Rationale: operational cutover
+already completed at E6 (2026-07-14); v1 trend is flat-zero and can't be forced lower from the
+v2 side; remaining stragglers are served by deprecation + Sunset headers until 2026-10-11.
+E7 Checks 1–4 re-verified clean the same day and Section E signed off. **The
+`varsitylax-migration-daily-check` scheduled task is no longer needed and can be deleted.**
 
 ## Session E env knobs (already deployed, all default-off)
 

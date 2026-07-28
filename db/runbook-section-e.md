@@ -353,30 +353,46 @@ Sign-off criteria:
 
 | # | Item | Status |
 |---|---|---|
-| 1 | E1: v2 routes deployed and reachable before dual-write | ☐ |
-| 2 | E2: Dual-write activated; rankings AND schedule confirmed in both schemas | ☐ |
-| 3 | E3: 3 clean runs spanning ≥ 48 hours documented in tracking table | ☐ |
-| 4 | E4: Warning:299 header live on all v1 routes; absent on v2 | ☐ |
-| 5 | E5: iOS fallback (Phase 2 Part 5.4) verified before cutover | ☐ |
-| 6 | E5: iOS client on v2; stable ≥ 15 min post-deploy | ☐ |
-| 7 | E5.5: Sunset header set to E5 date + 90 days; verified on v1 only | ☐ |
-| 8 | E6: v1 write path disabled; both legacy tables frozen | ☐ |
-| 9 | Check 1: live_source_records_today > 0 | ☐ |
-| 10 | Check 2: missing_canonical_today = 0 | ☐ |
-| 11 | Check 4: both v1 timestamps > 24 hours ago | ☐ |
-| 12 | Check 5: v1 traffic < 1% of v2 for 7+ consecutive days | ☐ |
+| 1 | E1: v2 routes deployed and reachable before dual-write | ☑ |
+| 2 | E2: Dual-write activated; rankings AND schedule confirmed in both schemas | ☑ |
+| 3 | E3: 3 clean runs spanning ≥ 48 hours documented in tracking table | ☑ |
+| 4 | E4: Warning:299 header live on all v1 routes; absent on v2 | ☑ |
+| 5 | E5: iOS fallback (Phase 2 Part 5.4) verified before cutover | ☑ |
+| 6 | E5: iOS client on v2; stable ≥ 15 min post-deploy | ☑ |
+| 7 | E5.5: Sunset header set to E5 date + 90 days; verified on v1 only | ☑ |
+| 8 | E6: v1 write path disabled; both legacy tables frozen | ☑ |
+| 9 | Check 1: live_source_records_today > 0 (=354, verified 2026-07-24) | ☑ |
+| 10 | Check 2: missing_canonical_today = 0 (verified 2026-07-24) | ☑ |
+| 11 | Check 4: both v1 timestamps > 24 hours ago (frozen 2026-07-15 00:04 UTC, ~9.7d) | ☑ |
+| 12 | Check 5 (AMENDED gate, approved 2026-07-19): zero monitor/synthetic v1 traffic AND old-client v1 GETs declining/flat-low. **Closed early at 5 of 7 clean days by executor decision (Spencer, 2026-07-24)** — the literal 7-consecutive-day window was waived; the original "<1% of v2 for 7 days" criterion was unattainable off-season. See note below. | ☑* |
 
 ```
-DATE (≥ 24h after E6):    ____________________
-EXECUTOR:                  ____________________
-E5 completed at:           ____________________
-Sunset date (E5 + 90d):   ____________________
-E6 completed at:           ____________________
-v1 < 1% threshold date:   ____________________
-v2 deploy SHA:             ____________________
-iOS deploy build:          ____________________
+DATE (≥ 24h after E6):    2026-07-24 (17:23 UTC DB clock; Railway console on varsitylax-api)
+EXECUTOR:                  Spencer Welch
+E5 completed at:           2026-07-13 (v1.6.0 App Store release)
+Sunset date (E5 + 90d):   Sun, 11 Oct 2026 00:00:00 GMT (V1_SUNSET_DATE on varsitylax-api)
+E6 completed at:           2026-07-14 ~17:50 PDT (WRITE_MODE=v2)
+v1 < 1% threshold date:   AMENDED gate (approved 2026-07-19); clock started 2026-07-19 ~16:45 PDT
+                           after UptimeRobot monitor repointed off v1 to /api/v2/health.
+                           Closed early at 5 of 7 clean days (Jul 20–24, all clean) by
+                           executor decision on 2026-07-24 — see note below.
+v2 deploy SHA:             915c3eae (varsitylax-api ACTIVE deployment)
+iOS deploy build:          1.6.0 (App Store, v2 primary + v1 fallback)
 Section E:                 ✅ APPROVED
 ```
+
+> **Check 5 note (early close, 2026-07-24).** The amended Check-5 gate (approved 2026-07-19)
+> called for zero monitor/synthetic v1 traffic AND declining/flat-low old-client v1 GETs for
+> 7 consecutive days. As of the 2026-07-24 automated check, 5 consecutive clean days had been
+> observed (Jul 20–24): zero v1 monitor HEADs since the repoint (last v1 HEAD 2026-07-19
+> 16:31:56 PDT), zero old-client v1 GETs since 2026-07-19 15:50 PDT on both
+> /api/rankings/laxnumbers and /api/schedule/all, and healthy v2 client + monitor traffic
+> (e.g. v2 rankings GETs 2026-07-24 14:52 PDT). Executor (Spencer Welch) elected to close the
+> gate at 5 clean days rather than wait the remaining 2, given the flat-zero v1 trend and that
+> the operational cutover completed at E6 (2026-07-14). The 2 waived days carry negligible risk:
+> remaining v1 stragglers are auto-updating installs served by deprecation + Sunset headers
+> until the 2026-10-11 sunset and cannot be forced off from the v2 side. Checks 1–4 re-verified
+> clean on 2026-07-24 (see criteria table).
 
 ---
 
