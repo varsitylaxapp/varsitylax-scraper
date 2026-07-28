@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const db      = require('./db');
+const { DEFAULT_STATE } = require('./config/states');
 
 const app  = express();
 const PORT = parseInt(process.env.PORT || '3000');
@@ -32,8 +33,11 @@ app.use('/api', (req, res, next) => {
 app.get('/health', async (req, res) => {
   try {
     const [rows] = await db.execute(
-      'SELECT scraped_at FROM scrape_log WHERE status = ? ORDER BY scraped_at DESC LIMIT 1',
-      ['success']
+      // v1 is Oregon-only for its whole remaining life. Without this predicate a
+      // successful non-Oregon scrape would become "the last scrape" and mask an
+      // Oregon failure.
+      'SELECT scraped_at FROM scrape_log WHERE status = ? AND state = ? ORDER BY scraped_at DESC LIMIT 1',
+      ['success', DEFAULT_STATE]
     );
     res.json({ status: 'ok', lastScrape: rows[0]?.scraped_at || null });
   } catch (err) {

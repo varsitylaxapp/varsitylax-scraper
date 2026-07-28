@@ -6,25 +6,43 @@
 // as { slug, name }.
 const express = require('express');
 const db = require('./db');
+const { DEFAULT_STATE, isValidState } = require('./config/states');
 
 const router = express.Router();
 const SEASON = () => parseInt(process.env.SEASON || '2026');
 const num = v => (v === null || v === undefined ? null : parseFloat(v));
 
+// Resolve ?state= → uppercase code (decision D6: query param on /v2, not a
+// path-scoped route; path-scoping is the intended shape for the next deliberate
+// API version bump, not for Phase F).
+//   absent/empty → DEFAULT_STATE, so every caller written before multi-state
+//                  (including the shipped iOS app) is byte-for-byte unaffected
+//   unknown      → null; caller replies 400, a path Oregon never reaches
+function reqState(req) {
+  const raw = req.query.state;
+  if (raw === undefined || raw === '') return DEFAULT_STATE;
+  const code = String(raw).toUpperCase();
+  return isValidState(code) ? code : null;
+}
+
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-async function latestSnapshot(source, season) {
+async function latestSnapshot(source, season, state = DEFAULT_STATE) {
   const [[snap]] = await db.execute(
     `SELECT id, captured_at FROM rankings_snapshots
-     WHERE source = ? AND season = ? ORDER BY captured_at DESC LIMIT 1`, [source, season]);
+     WHERE source = ? AND season = ? AND state = ?
+     ORDER BY captured_at DESC LIMIT 1`, [source, season, state]);
   if (!snap) return null;
   const [rows] = await db.execute(
     `SELECT re.rank_position, t.slug, t.name AS teamName,
-            re.rating, re.agd, re.sched, re.record_wins AS wins, re.record_losses AS losses
+            re.rating, re.agd, re.sched, re.record_wins AS wins, re.record_losses AS losses,
+            d.name AS divisionName, d.is_default AS divisionIsDefault
      FROM ranking_entries re
      JOIN teams t ON t.id = re.team_id
+     LEFT JOIN team_seasons ts ON ts.team_id = re.team_id AND ts.season = ?
+     LEFT JOIN divisions d ON d.id = ts.division_id
      WHERE re.snapshot_id = ?
-     ORDER BY re.rank_position`, [snap.id]);
+     ORDER BY re.rank_position`, [season, snap.id]);
   return {
     capturedAt: snap.captured_at,
     rankings: rows.map(r => ({
@@ -32,6 +50,10 @@ async function latestSnapshot(source, season) {
       wins: r.wins, losses: r.losses,
       record: r.wins !== null && r.losses !== null ? `${r.wins}-${r.losses}` : null,
       rating: num(r.rating), agd: num(r.agd), sched: num(r.sched),
+      // Appended LAST and omitted entirely for single-division states. Oregon's
+      // division is 'or_open' with is_default = 1, so Oregon rows serialize with
+      // exactly the keys, in exactly the order, they had before Section F.
+      ...(r.divisionName && !r.divisionIsDefault ? { division: r.divisionName } : {}),
     })),
   };
 }
@@ -76,11 +98,13 @@ function pacificISO(d) {
 
 // ── GET /api/v2/health ───────────────────────────────────────────────────────
 router.get('/health', async (req, res) => {
+  const state = reqState(req);
+  if (!state) return res.status(400).json({ error: `unknown state '${req.query.state}'` });
   try {
     const [[gsr]] = await db.execute(
       `SELECT MAX(scraped_at) AS lastGameWrite FROM game_source_records WHERE source != 'backfill'`);
     const [[snap]] = await db.execute(
-      `SELECT MAX(captured_at) AS lastSnapshot FROM rankings_snapshots`);
+      `SELECT MAX(captured_at) AS lastSnapshot FROM rankings_snapshots WHERE state = ?`, [state]);
     res.json({
       status: 'ok', schema: 'v2',
       lastGameWrite: pacificISO(gsr.lastGameWrite),
@@ -92,8 +116,10 @@ router.get('/health', async (req, res) => {
 // ── GET /api/v2/rankings/laxnumbers | laxpower ──────────────────────────────
 router.get('/rankings/laxnumbers', async (req, res) => {
   const season = parseInt(req.query.season || SEASON());
+  const state = reqState(req);
+  if (!state) return res.status(400).json({ error: `unknown state '${req.query.state}'` });
   try {
-    const snap = await latestSnapshot('laxnumbers', season);
+    const snap = await latestSnapshot('laxnumbers', season, state);
     if (!snap) return res.status(404).json({ error: `no laxnumbers snapshot for season ${season}` });
     res.json({ source: 'laxnumbers', season, updated: snap.capturedAt, rankings: snap.rankings });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -101,8 +127,10 @@ router.get('/rankings/laxnumbers', async (req, res) => {
 
 router.get('/rankings/laxpower', async (req, res) => {
   const season = parseInt(req.query.season || SEASON());
+  const state = reqState(req);
+  if (!state) return res.status(400).json({ error: `unknown state '${req.query.state}'` });
   try {
-    const snap = await latestSnapshot('laxpower', season);
+    const snap = await latestSnapshot('laxpower', season, state);
     if (!snap) return res.status(404).json({ error: `no laxpower snapshot for season ${season}` });
     // laxpower's metric is consensus — stored in rating, surfaced under both names
     const rankings = snap.rankings.map(({ agd, sched, ...r }) => ({ ...r, consensus: r.rating }));
@@ -112,9 +140,11 @@ router.get('/rankings/laxpower', async (req, res) => {
 
 router.get('/rankings/both', async (req, res) => {
   const season = parseInt(req.query.season || SEASON());
+  const state = reqState(req);
+  if (!state) return res.status(400).json({ error: `unknown state '${req.query.state}'` });
   try {
     const [ln, lp] = await Promise.all([
-      latestSnapshot('laxnumbers', season), latestSnapshot('laxpower', season)]);
+      latestSnapshot('laxnumbers', season, state), latestSnapshot('laxpower', season, state)]);
     res.json({
       season,
       laxnumbers: ln ? { updated: ln.capturedAt, rankings: ln.rankings } : null,
@@ -129,6 +159,8 @@ router.get('/rankings/both', async (req, res) => {
 // ── GET /api/v2/teams ────────────────────────────────────────────────────────
 router.get('/teams', async (req, res) => {
   const season = parseInt(req.query.season || SEASON());
+  const state = reqState(req);
+  if (!state) return res.status(400).json({ error: `unknown state '${req.query.state}'` });
   try {
     const [rows] = await db.execute(
       `SELECT t.slug, t.name, t.mascot, t.city, t.state,
@@ -137,8 +169,8 @@ router.get('/teams', async (req, res) => {
        FROM teams t
        LEFT JOIN team_seasons ts ON ts.team_id = t.id AND ts.season = ?
        LEFT JOIN venues v ON v.id = t.home_venue_id
-       WHERE t.state = 'OR'
-       ORDER BY t.name`, [season]);
+       WHERE t.state = ?
+       ORDER BY t.name`, [season, state]);
     res.json({
       season,
       teams: rows.map(r => ({
