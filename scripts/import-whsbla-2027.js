@@ -15,8 +15,13 @@
 // Therefore: 2026 keeps division_source='laxnumbers_provisional' untouched, and
 // the October final supersedes THIS row set (2027) wholesale.
 //
-// Teams are never created here — WA is roster-locked. An unmatched draft name is
-// FLAGGED, never guessed.
+// Teams are never created here BY INFERENCE — WA is roster-locked. An unmatched
+// draft name is FLAGGED, never guessed.
+//
+// The one exception is a recorded ROSTER ADMISSION in alias-decisions.json: a
+// team admitted by LEAGUE AUTHORITY (it appears in the league's own official
+// file). That is the league speaking, not the importer guessing. Admissions
+// carry an approver, evidence, and a reversal rule.
 require('dotenv').config();
 const { execFileSync } = require('child_process');
 const db = require('../src/db');
@@ -51,6 +56,11 @@ print(json.dumps([{'name': str(r[0]).strip(), 'cls': str(r[1]).strip() if r[1] e
   const draft = JSON.parse(raw);
   console.log(`draft rows: ${draft.length}`);
 
+  const DEC = JSON.parse(require('fs').readFileSync('data/whsbla-2026/alias-decisions.json', 'utf8'));
+  const admissions = (DEC.roster_admissions || []).filter(a => a.admit_for_season === SEASON);
+  console.log(`roster admissions for ${SEASON}: ${admissions.length}` +
+    (admissions.length ? ` (${admissions.map(a => a.name).join(', ')})` : ''));
+
   const teams = await q("SELECT id, slug, name, state FROM teams WHERE state = 'WA'");
   const aliases = await q("SELECT team_id, alias_normalized FROM team_aliases WHERE state = 'WA'");
   const idx = new Map();
@@ -59,6 +69,28 @@ print(json.dumps([{'name': str(r[0]).strip(), 'cls': str(r[1]).strip() if r[1] e
   const looseIdx = new Map();
   for (const t of teams) { looseIdx.set(loose(t.name), t.id); looseIdx.set(loose(t.slug), t.id); }
   for (const a of aliases) looseIdx.set(loose(a.alias_normalized), a.team_id);
+
+  // Apply admissions BEFORE matching so the admitted team resolves normally.
+  const admittedIds = new Map();
+  for (const a of admissions) {
+    let id = idx.get(normalizeAlias(a.name)) ?? looseIdx.get(loose(a.name)) ?? null;
+    if (!id && COMMIT) {
+      const r = await q(`INSERT INTO teams (slug, name, state) VALUES (?, ?, ?)
+                         ON DUPLICATE KEY UPDATE name = VALUES(name), id = LAST_INSERT_ID(id)`,
+        [a.slug, a.name, a.state]);
+      id = r.insertId;
+      for (const al of new Set([a.name, a.slug])) {
+        await q(`INSERT IGNORE INTO team_aliases (team_id, state, alias, source)
+                 VALUES (?, ?, ?, ?)`, [id, a.state, al, a.division_source]);
+      }
+      // the ruling resolved it; retire the flag that asked for the ruling
+      await q(`DELETE FROM unresolved_aliases WHERE raw_name = ? AND state = ?`, [a.name, a.state]);
+      console.log(`  ADMITTED ${a.name} -> ${a.slug} (id ${id}) by ${a.approver}, ${a.basis}`);
+    } else if (id) {
+      console.log(`  admission ${a.name} already present as team id ${id}`);
+    }
+    if (id) { admittedIds.set(a.name, id); idx.set(normalizeAlias(a.name), id); looseIdx.set(loose(a.name), id); }
+  }
 
   const matched = [], unmatched = [], badClass = [];
   for (const d of draft) {

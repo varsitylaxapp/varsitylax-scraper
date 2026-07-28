@@ -1,5 +1,5 @@
 {
-  "_comment": "Human-approved alias resolutions. Decisions as data, with approver and evidence. Any name a machine cannot resolve is FLAGGED, never guessed; a human ruling is recorded here and becomes the written trail. Pattern approved 2026-07-28.",
+  "_comment": "Human-approved alias resolutions. Decisions as data, with approver and evidence. Any name a machine cannot resolve is FLAGGED, never guessed; a human ruling is recorded here and becomes the written trail. Pattern approved 2026-07-28. roster_admissions records teams ADMITTED to a roster-locked state by league authority; alias decisions resolve NAMES, admissions add MEMBERS.",
   "decisions": [
     {
       "alias": "Bainbridge",
@@ -73,6 +73,25 @@
         "existing row claremont_bc is named 'Claremont Secondary' (from a7-classification)",
         "WHSBLA export uses the short form; short form becomes an alias and the canonical name is untouched"
       ]
+    }
+  ],
+  "roster_admissions": [
+    {
+      "name": "Vashon",
+      "slug": "vashon_wa",
+      "state": "WA",
+      "admit_for_season": 2027,
+      "division_id": "wa_2a",
+      "division_source": "whsbla_draft_2027",
+      "approver": "Spencer",
+      "approved_on": "2026-07-28",
+      "basis": "league authority \u2014 roster membership changes come from the league, not from inference",
+      "evidence": [
+        "appears in Brandon Fortier's official WHSBLA 2027 draft classification file",
+        "the roster lock worked as designed: it surfaced a membership change for a ruling instead of auto-creating",
+        "no 2026 rows anywhere \u2014 Vashon was not a 2026 member"
+      ],
+      "reversal_rule": "if the October final list drops Vashon, it is removed the same way it arrived \u2014 by league authority"
     }
   ]
 }
