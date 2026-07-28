@@ -92,6 +92,34 @@ const pool = mysql.createPool({
   queueLimit:         0,
 });
 
+// ─── The app carries STRICT mode to whatever host it lands on ────────────────
+//
+// Production runs sql_mode = NO_ENGINE_SUBSTITUTION — no STRICT. Staging and the
+// 8.0.41 rehearsal both had STRICT, so the difference was invisible until the
+// 2026-07-28 prod window: an INSERT omitting a NOT NULL column with no default
+// does not error there, it silently writes ''. Rows written that way are
+// invisible to every `AND state = ?` read.
+//
+// DreamHost's global sql_mode is not ours to change, so we stop depending on it.
+// Every pooled connection opts into STRICT_TRANS_TABLES for its own session.
+//
+// Queued on the 'connection' event: mysql2 executes per-connection commands in
+// FIFO order, so this runs before any caller query on that connection.
+// Idempotent — re-applying on a host that already has STRICT is a no-op.
+const STRICT_SQL =
+  "SET SESSION sql_mode = IF(@@SESSION.sql_mode LIKE '%STRICT_TRANS_TABLES%', " +
+  "@@SESSION.sql_mode, CONCAT_WS(',', @@SESSION.sql_mode, 'STRICT_TRANS_TABLES'))";
+
+pool.on('connection', (connection) => {
+  connection.query(STRICT_SQL, (err) => {
+    if (err) {
+      // Loud, but non-fatal: a connection without STRICT still works, it just
+      // loses the guard. Silence here would defeat the entire point.
+      console.error('[db] WARNING: failed to set SESSION sql_mode STRICT:', err.message);
+    }
+  });
+});
+
 // Exposed so scripts can assert/report their target without re-deriving it.
 pool.targetLabel = target;
 pool.targetDescription = `${target}:${config.host}/${config.database}`;

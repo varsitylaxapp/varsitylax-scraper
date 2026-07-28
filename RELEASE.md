@@ -179,6 +179,69 @@ its next cycle — no manual warm-up needed.
 
 ---
 
+## Runbook notes — learned the hard way, 2026-07-28
+
+### ⚠️ prod sql_mode ≠ staging sql_mode
+
+```
+prod (DreamHost)          NO_ENGINE_SUBSTITUTION          <- NO STRICT
+staging (Railway MySQL)   ...STRICT_TRANS_TABLES...
+rehearsal (mysql:8.0.41)  ...STRICT_TRANS_TABLES...       <- Railway default
+```
+
+Same MySQL version, different mode. **A rehearsal that does not match prod's
+`sql_mode` is testing a different database.** The 8.0.41 rehearsal reported
+`ERROR 1364` for a missing `state`; prod silently wrote `state = ''` instead —
+and because every read filters `AND state = ?`, such rows are invisible to the
+API. Rankings would look frozen while `scrape_log` reported success.
+
+**Every future rehearsal must run `SET GLOBAL sql_mode = '<prod's value>'`
+immediately after boot, before restoring anything.** Verify with
+`SELECT @@GLOBAL.sql_mode`, not by assumption.
+
+Mitigated by section-h (CHECK constraints, enforced regardless of sql_mode) and
+by `src/db.js`, which now sets `SESSION sql_mode` to include
+`STRICT_TRANS_TABLES` on every pooled connection — the app carries strict mode
+to whatever host it lands on. Both were verified independently on a
+deliberately non-strict instance.
+
+### ⚠️ Railway cron fires in UTC
+
+`0 */2 * * *` runs at even **UTC** hours, which are **odd Pacific** hours
+(1,3,5,…,23 local). During the 2026-07-28 window a watcher was pointed at
+"14:00" and correctly saw nothing — there is no scheduled slot at an even
+Pacific hour. Compute the next fire in UTC, or read it off `scrape_log`:
+
+```sql
+SELECT HOUR(scraped_at), COUNT(*) FROM scrape_log
+WHERE source='laxnumbers-v2' GROUP BY 1 ORDER BY 1;
+```
+
+### ⚠️ Clearing `cronSchedule` does NOT stop the service
+
+`serviceInstanceUpdate(input:{cronSchedule:null})` converts the cron job into a
+**regular service**. It stops firing on a schedule, but the next deploy
+**starts it immediately**. On 2026-07-28 the step-6 push triggered a full scrape
+inside what was described as a paused window. It was harmless — the run used the
+newly deployed code — but the pause was not what it appeared to be.
+
+If a genuine stop is required, remove the deployment or scale to zero replicas.
+For a migrate-then-deploy window, clearing the schedule is *sufficient* (it
+prevents a scheduled run in the dangerous gap), but understand that the deploy
+itself will trigger one run with the NEW code.
+
+Note `index.js` exits after one pass and `restartPolicyType = NEVER`, so that
+triggered run terminates rather than looping.
+
+### ⚠️ Every prod probe runs in a transaction
+
+A bare `INSERT` used as a "this should fail" probe **succeeded** on prod and
+wrote a garbage row (removed, verified). A should-fail probe is exactly the case
+where the environment surprises you. `START TRANSACTION` … `ROLLBACK`, always,
+no exceptions.
+
+---
+
 ## Stage (c) — Washington data, decided separately
 
 **The schema can ship long before Washington content does.** Stage (b) is a
