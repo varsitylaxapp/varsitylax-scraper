@@ -1,0 +1,78 @@
+{
+  "_comment": "Human-approved alias resolutions. Decisions as data, with approver and evidence. Any name a machine cannot resolve is FLAGGED, never guessed; a human ruling is recorded here and becomes the written trail. Pattern approved 2026-07-28.",
+  "decisions": [
+    {
+      "alias": "Bainbridge",
+      "source_export": "WHSBLA Teams.xlsx 2026",
+      "resolves_to_slug": "bainbridge_island_wa",
+      "state": "WA",
+      "division_id": "wa_3a",
+      "approver": "Spencer",
+      "approved_on": "2026-07-28",
+      "basis": "human-approved, explicitly NOT a machine inference",
+      "evidence": [
+        "exactly one Bainbridge HS exists in WA, located on Bainbridge Island",
+        "the WHSBLA schedule's own Location field reads 'Bainbridge HS'",
+        "production already carries a bainbridge_island_wa row seeded from a7-classification.json",
+        "LaxNumbers class page v=3583 (3A) lists 'Bainbridge Island'"
+      ]
+    },
+    {
+      "alias": "Aloha (OR)",
+      "source_export": "WHSBLA Teams.xlsx 2026",
+      "resolves_to_slug": "aloha_southridge",
+      "state": "OR",
+      "division_id": null,
+      "approver": "Spencer",
+      "approved_on": "2026-07-28",
+      "basis": "human-approved: WHSBLA export names an existing Oregon co-op by its short name",
+      "evidence": [
+        "OHSLA canonical name is the co-op 'Aloha/Southridge'",
+        "Oregon's 41-team roster is curated and roster-locked; this is an alias, not a new team"
+      ]
+    },
+    {
+      "alias": "Bend-Calderra (OR)",
+      "source_export": "WHSBLA Teams.xlsx 2026",
+      "resolves_to_slug": "bend_caldera",
+      "state": "OR",
+      "division_id": null,
+      "approver": "Spencer",
+      "approved_on": "2026-07-28",
+      "basis": "human-approved: EXPORT TYPO \u2014 'Calderra' has a doubled r",
+      "evidence": [
+        "OHSLA canonical name is 'Bend/Caldera' (one r)",
+        "LaxNumbers Oregon feed also lists 'Bend/Caldera'",
+        "no school named 'Calderra' exists; this is a transcription error in the league export"
+      ]
+    },
+    {
+      "alias": "Clackamas (OR)",
+      "source_export": "WHSBLA Teams.xlsx 2026",
+      "resolves_to_slug": "nelson",
+      "state": "OR",
+      "division_id": null,
+      "approver": "Spencer",
+      "approved_on": "2026-07-28",
+      "basis": "human-approved: WHSBLA export names an existing Oregon co-op by its short name",
+      "evidence": [
+        "OHSLA canonical name is the co-op 'Clackamas/Nelson', slug 'nelson'",
+        "Oregon roster is locked; this is an alias, not a new team"
+      ]
+    },
+    {
+      "alias": "Claremont",
+      "source_export": "WHSBLA Teams.xlsx 2026",
+      "resolves_to_slug": "claremont_bc",
+      "state": "BC",
+      "division_id": null,
+      "approver": "Spencer",
+      "approved_on": "2026-07-28",
+      "basis": "human-approved: alias, NOT a rename \u2014 the canonical name stays 'Claremont Secondary'",
+      "evidence": [
+        "existing row claremont_bc is named 'Claremont Secondary' (from a7-classification)",
+        "WHSBLA export uses the short form; short form becomes an alias and the canonical name is untouched"
+      ]
+    }
+  ]
+}

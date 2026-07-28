@@ -186,9 +186,15 @@ router.get('/teams', async (req, res) => {
 // ── GET /api/v2/schedule/all ─────────────────────────────────────────────────
 router.get('/schedule/all', async (req, res) => {
   const season = parseInt(req.query.season || SEASON());
+  const state = reqState(req);
+  if (!state) return res.status(400).json({ error: `unknown state '${req.query.state}'` });
   try {
+    // Either side in the requested state: an OR-vs-WA game belongs to BOTH
+    // states' feeds. Defaulting to OR keeps the shipped iOS app byte-identical
+    // — it must never receive another state's games until it asks.
     const [rows] = await db.execute(
-      `${GAME_SELECT} WHERE g.season = ? ORDER BY g.game_date, g.id`, [season]);
+      `${GAME_SELECT} WHERE g.season = ? AND (ht.state = ? OR at2.state = ?)
+       ORDER BY g.game_date, g.id`, [season, state, state]);
     res.json({ season, games: rows.map(gameJson) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -198,11 +204,15 @@ router.get('/schedule/all', async (req, res) => {
 // the 2026 value the v1 endpoint hardcodes.
 router.get('/schedule/playoffs', async (req, res) => {
   const season = parseInt(req.query.season || SEASON());
+  const state = reqState(req);
+  if (!state) return res.status(400).json({ error: `unknown state '${req.query.state}'` });
   const start = process.env.PLAYOFFS_START || `${season}-05-14`;
   try {
     const [rows] = await db.execute(
-      `${GAME_SELECT} WHERE g.season = ? AND g.game_date >= ? ORDER BY g.game_date, g.id`,
-      [season, start]);
+      `${GAME_SELECT} WHERE g.season = ? AND g.game_date >= ?
+         AND (ht.state = ? OR at2.state = ?)
+       ORDER BY g.game_date, g.id`,
+      [season, start, state, state]);
     res.json({ season, playoffsStart: start, games: rows.map(gameJson) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
