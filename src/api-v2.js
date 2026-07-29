@@ -6,7 +6,7 @@
 // as { slug, name }.
 const express = require('express');
 const db = require('./db');
-const { DEFAULT_STATE, isValidState } = require('./config/states');
+const { DEFAULT_STATE, isValidState, listStates } = require('./config/states');
 
 const router = express.Router();
 const SEASON = () => parseInt(process.env.SEASON || '2026');
@@ -95,6 +95,43 @@ function pacificISO(d) {
   if (!m) return `${wall}-08:00`; // defensive fallback
   return `${wall}${m[1]}${m[2].padStart(2, '0')}:${m[3] || '00'}`;
 }
+
+// ── GET /api/v2/states ───────────────────────────────────────────────────────
+// The app's source of truth for the state picker, the Rankings filter chips, the
+// Playoffs segmented control, and which tabs render an empty state.
+//
+// Served entirely from src/config/states.js — no DB read. That is deliberate:
+// this describes what the PRODUCT offers per state, which must not flicker with
+// whatever rows happen to exist.
+//
+// NO TEAM COUNTS. The context line under a rankings list binds to the number of
+// rows actually rendered, never a number shipped from here — a hardcoded count
+// would have read 31 for Idaho, a 24-team state.
+//
+// leagueName is null unless ONE league governs every listed team. Idaho and
+// Nevada are null because they span multiple leagues; naming one over the whole
+// list is the same error as building Washington on KingCo.
+router.get('/states', (req, res) => {
+  try {
+    res.json({
+      states: listStates().map(s => ({
+        code: s.code,
+        displayName: s.name,
+        leagueName: s.leagueName ?? null,
+        divisions: s.divisions.map(d => ({
+          id: d.id,
+          label: d.name,
+          isDefault: !!d.isDefault,
+        })),
+        capabilities: {
+          hasRankings:  !!s.capabilities.hasRankings,
+          hasSchedules: !!s.capabilities.hasSchedules,
+          hasPlayoffs:  !!s.capabilities.hasPlayoffs,
+        },
+      })),
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
 // ── GET /api/v2/health ───────────────────────────────────────────────────────
 router.get('/health', async (req, res) => {

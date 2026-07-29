@@ -34,6 +34,12 @@ const STATES = {
     timeZone: 'America/Los_Angeles',
     laxnumbersId: 3443,
 
+    // Governing body for the context line under a rankings list. NAMED ONLY WHEN
+    // ONE LEAGUE GOVERNS EVERY LISTED TEAM — otherwise null, and the app falls
+    // back to "<count> programs · <State> high school lacrosse". Naming a league
+    // that covers only part of a list is the KingCo error.
+    leagueName: 'OHSLA',
+
     // Mirrors the `divisions` table. Oregon is the degenerate single-division
     // case; isDefault suppresses all division affordances in the UI and the API.
     divisions: [
@@ -55,6 +61,90 @@ const STATES = {
     },
 
     playoffs: null,   // PlayoffFormat extraction is a later phase
+  },
+
+  WA: {
+    code: 'WA',
+    name: 'Washington',
+    // enabled gates the SCRAPER ONLY (enabledStates() -> index.js / cron.js).
+    // Washington ingestion is export-based, not scraped, so this stays false;
+    // it does not mean the state is hidden from the app. /api/v2/states lists
+    // every registered state regardless.
+    enabled: false,
+    slugSuffix: '_wa',
+    timeZone: 'America/Los_Angeles',
+    laxnumbersId: 3580,
+    leagueName: 'WHSBLA',
+    // Mirrors the divisions table. WHSBLA scrapped 1A; these four are exact.
+    divisions: [
+      { id: 'wa_4a',      name: '4A',      isDefault: false, sortOrder: 0 },
+      { id: 'wa_3a',      name: '3A',      isDefault: false, sortOrder: 1 },
+      { id: 'wa_2a',      name: '2A',      isDefault: false, sortOrder: 2 },
+      { id: 'wa_private', name: 'PV/Open', isDefault: false, sortOrder: 3 },
+    ],
+    regions: null,
+    capabilities: { hasRankings: true, hasSchedules: true, hasPlayoffs: true },
+    scheduleSource: { kind: 'export', host: null, group: null, lgId: '50652', label: 'WHSBLA' },
+    playoffs: null,
+  },
+
+  // ── rankings-only states ──────────────────────────────────────────────────
+  // Division structure is genuinely unknown for these four. Each carries the
+  // degenerate single default division, exactly like Oregon, so the app's
+  // "isDefault => render no chips" rule needs no special case. Do NOT invent
+  // classifications here.
+  //
+  // NOTE: the matching `divisions` rows do not exist in the database yet — they
+  // are created when a state is seeded. This endpoint reads the registry, so the
+  // id is advertised before the row exists. team_seasons.division_id has an FK,
+  // so seeding must create the row first.
+  AZ: {
+    code: 'AZ', name: 'Arizona', enabled: false, slugSuffix: '_az',
+    timeZone: 'America/Phoenix',        // no DST — Arizona does not observe it
+    laxnumbersId: 3013,
+    leagueName: 'Arizona Lacrosse League',   // single official league for AZ boys
+    divisions: [{ id: 'az_open', name: 'All', isDefault: true, sortOrder: 0 }],
+    regions: null,
+    capabilities: { hasRankings: true, hasSchedules: false, hasPlayoffs: false },
+    scheduleSource: null, playoffs: null,
+  },
+  ID: {
+    code: 'ID', name: 'Idaho', enabled: false, slugSuffix: '_id',
+    timeZone: 'America/Boise',
+    laxnumbersId: 3146,
+    // NULL deliberately. SWILA covers the Treasure Valley only; the LaxNumbers
+    // Idaho feed spans multiple leagues (North Idaho and others). Naming SWILA
+    // over the whole list is the KingCo error. The feed cannot even identify
+    // SWILA membership — its `suffix` field is a division-leader badge and reads
+    // SWILA exactly once across 24 Idaho teams.
+    leagueName: null,
+    divisions: [{ id: 'id_open', name: 'All', isDefault: true, sortOrder: 0 }],
+    regions: null,
+    capabilities: { hasRankings: true, hasSchedules: false, hasPlayoffs: false },
+    scheduleSource: null, playoffs: null,
+  },
+  MT: {
+    code: 'MT', name: 'Montana', enabled: false, slugSuffix: '_mt',
+    timeZone: 'America/Denver',
+    laxnumbersId: 3300,
+    leagueName: 'Montana High School Lacrosse League',
+    divisions: [{ id: 'mt_open', name: 'All', isDefault: true, sortOrder: 0 }],
+    regions: null,
+    capabilities: { hasRankings: true, hasSchedules: false, hasPlayoffs: false },
+    scheduleSource: null, playoffs: null,
+  },
+  NV: {
+    code: 'NV', name: 'Nevada', enabled: false, slugSuffix: '_nv',
+    timeZone: 'America/Los_Angeles',
+    laxnumbersId: 3341,
+    // NULL deliberately — the state splits between the High Sierra Lacrosse
+    // League (Reno/Tahoe) and the Las Vegas Lacrosse Alliance, and the feed
+    // mixes both.
+    leagueName: null,
+    divisions: [{ id: 'nv_open', name: 'All', isDefault: true, sortOrder: 0 }],
+    regions: null,
+    capabilities: { hasRankings: true, hasSchedules: false, hasPlayoffs: false },
+    scheduleSource: null, playoffs: null,
   },
 };
 
