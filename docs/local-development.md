@@ -172,3 +172,23 @@ enablement gate.
 Any probe against production goes in a transaction with an explicit `ROLLBACK` —
 including probes expected to fail. A should-fail probe is exactly where the
 environment surprises you.
+
+## Trusting an iOS build result
+
+`xcodebuild` reports errors from the first file that fails to type-check and
+then stops. It does **not** enumerate every broken file in the module.
+
+This misleads in a specific, expensive way: a build reporting 40 errors "all in
+MockData.swift" looked like MockData was the only problem, while `DataService`
+sat mid-edit with `throw` statements in non-throwing functions and stale
+initializer calls that had simply not been reached yet. Fixing the reported file
+and rebuilding surfaced an entirely new front each time.
+
+So the only trustworthy clean signal is **a full build run after the last edit**
+— not an earlier build, and not an error list from a build whose first file
+failed. Corollary: a shrinking error count across rebuilds is not progress
+toward zero, it is the compiler getting further into the module.
+
+SourceKit diagnostics in an editor are weaker still. Without a full index they
+routinely report `Cannot find 'Config' in scope` for a type in the same module.
+Treat them as hints; `xcodebuild` is the arbiter.
