@@ -64,8 +64,8 @@ Point at staging expecting this, not the full six-state picture:
 | State | Teams | Games | Rankings | Notes |
 |---|---|---|---|---|
 | OR | 41 | 354 | ✅ laxnumbers + laxpower | complete |
-| WA | 77 | 508 | ❌ **none** | roster, schedule, playoffs, 2026+2027 classifications |
-| AZ | 7 | — | ❌ none | opponent placeholders, not a roster |
+| WA | 77 | 508 | ✅ laxnumbers (75) | roster, schedule, playoffs, 2026+2027 classifications |
+| AZ | 6 | — | ❌ none | opponent placeholders, not a roster |
 | ID | 5 | — | ❌ none | opponent placeholders |
 | MT | 2 | — | ❌ none | opponent placeholders |
 | NV | 6 | — | ❌ none | opponent placeholders |
@@ -76,21 +76,33 @@ The endpoint reports what the **product** offers per state. It is served from
 `src/config/states.js` and reads no tables, deliberately — capability must not
 flicker with whatever rows happen to exist.
 
-The consequence during development: five of six states return **HTTP 404** from
-`/rankings/laxnumbers` while advertising `hasRankings: true`.
+The consequence during development:
 
 ```
-OR  rankings 200      WA  rankings 404      AZ ID MT NV  rankings 404
+OR  rankings 200      WA  rankings 200      AZ ID MT NV  rankings 404
 ```
 
-Washington is the one that will bite, because its Rankings tab is a primary
-screen and it otherwise has full data. Nothing has ever run a Washington rankings
-scrape — the WHSBLA import seeded teams, games and classifications, and rankings
-were never part of it.
+Washington was closed on 2026-07-29 by a one-off scrape into staging
+(`scripts/scrape-state-rankings.js WA --target=staging --commit`) — 75 rows, all
+resolving, no team rows created. The four rankings-only states remain in the gap
+by design; their data arrives at each state's enablement gate.
 
 **Build the app to treat "capability true, data absent" as a real state**, not as
 an error. It will occur in production too, in the window between a state
 appearing in the picker and its first scrape landing.
+
+### Non-curated state hygiene is a gate, not a chore
+
+Before any rankings-only state's scrape is enabled — staging or prod — reconcile
+its placeholder rows against the LaxNumbers team list and merge duplicates
+through `alias-decisions.json` with provenance. Non-curated states have no roster
+lock, so nothing prevents a duplicate arriving from a second source.
+
+Worked example, applied 2026-07-29: `brophy_prep_az` merged into `brophy_az`.
+Same school (Brophy College Preparatory, Phoenix) reached from two directions —
+a7-classification recorded it as an *Oregon* opponent, the WHSBLA export as a
+*Washington* one. `scripts/apply-team-merges.js` repoints every reference and
+refuses to delete a row anything still points at.
 
 ### The AZ / ID / MT / NV rows are not rosters
 
@@ -103,10 +115,9 @@ Do not treat them as a roster, and do not compute a context-line count from them
 — the count binds to rendered rankings rows, which for these states is currently
 nothing.
 
-Spotted while checking: `brophy_az` **and** `brophy_prep_az` both exist, almost
-certainly the same school reached under two names by two different sources. It is
-the class of duplicate the roster lock now prevents for curated states, but these
-were seeded before that existed. Untangling waits for a real Arizona roster.
+The `brophy_az` / `brophy_prep_az` duplicate found here has been merged — see
+above. The remaining AZ/ID/MT/NV placeholders stay as they are until each state's
+enablement gate.
 
 ## Safety rails already in place
 

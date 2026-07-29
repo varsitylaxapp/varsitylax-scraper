@@ -1,5 +1,5 @@
 {
-  "_comment": "Human-approved alias resolutions. Decisions as data, with approver and evidence. Any name a machine cannot resolve is FLAGGED, never guessed; a human ruling is recorded here and becomes the written trail. Pattern approved 2026-07-28. roster_admissions records teams ADMITTED to a roster-locked state by league authority; alias decisions resolve NAMES, admissions add MEMBERS.",
+  "_comment": "Human-approved alias resolutions. Decisions as data, with approver and evidence. Any name a machine cannot resolve is FLAGGED, never guessed; a human ruling is recorded here and becomes the written trail. Pattern approved 2026-07-28. roster_admissions records teams ADMITTED to a roster-locked state by league authority; alias decisions resolve NAMES, admissions add MEMBERS. merges records duplicate team rows collapsed by human ruling; alias decisions resolve NAMES, admissions add MEMBERS, merges remove DUPLICATES.",
   "decisions": [
     {
       "alias": "Bainbridge",
@@ -92,6 +92,25 @@
         "no 2026 rows anywhere \u2014 Vashon was not a 2026 member"
       ],
       "reversal_rule": "if the October final list drops Vashon, it is removed the same way it arrived \u2014 by league authority"
+    }
+  ],
+  "merges": [
+    {
+      "keep_slug": "brophy_az",
+      "merge_slug": "brophy_prep_az",
+      "state": "AZ",
+      "approver": "Spencer",
+      "approved_on": "2026-07-29",
+      "basis": "same school reached from two directions by two sources; pre-dates the roster lock",
+      "evidence": [
+        "Brophy College Preparatory, Phoenix AZ \u2014 universally shortened to 'Brophy Prep'",
+        "brophy_az seeded from a7-classification.json as an OREGON opponent, name 'Brophy College Prep'",
+        "brophy_prep_az seeded from the WHSBLA 2026 export as a WASHINGTON opponent, name 'Brophy Prep'",
+        "both rows are state=AZ; neither has team_seasons or ranking_entries",
+        "brophy_az holds the only game reference (Sunset @ Brophy College Prep, 2026-03-21)"
+      ],
+      "keep_rationale": "brophy_az holds the game FK and carries the school's full canonical name",
+      "note": "Non-curated states have no roster lock, so nothing prevented this. Merging is a prerequisite gate before AZ rankings are ever enabled."
     }
   ]
 }
