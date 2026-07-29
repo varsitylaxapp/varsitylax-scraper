@@ -60,7 +60,8 @@ async function latestSnapshot(source, season, state = DEFAULT_STATE) {
 
 const GAME_SELECT = `
   SELECT g.id, g.season, g.game_date AS date, g.game_datetime AS datetime,
-         g.status, g.is_conference AS isConference, g.is_overtime AS isOvertime,
+         g.status, g.game_type AS gameType,
+         g.is_conference AS isConference, g.is_overtime AS isOvertime,
          g.home_score AS homeScore, g.away_score AS awayScore,
          ht.slug AS homeSlug, ht.name AS homeName, ht.state AS homeState,
          at2.slug AS awaySlug, at2.name AS awayName, at2.state AS awayState,
@@ -77,6 +78,10 @@ function gameJson(r) {
     home: { slug: r.homeSlug, name: r.homeName, state: r.homeState, score: r.homeScore },
     away: { slug: r.awaySlug, name: r.awayName, state: r.awayState, score: r.awayScore },
     venue: r.venueName ? { name: r.venueName, city: r.venueCity } : null,
+    // ADDITIVE 2026-07-29, appended LAST. Lets the client exclude exhibitions and
+    // practices from records; until now it hardcoded isScrimmage:false, so its
+    // W-L disagreed with the server's v_team_season_record.
+    gameType: r.gameType,
   };
 }
 
@@ -202,9 +207,11 @@ router.get('/teams', async (req, res) => {
     const [rows] = await db.execute(
       `SELECT t.slug, t.name, t.mascot, t.city, t.state,
               ts.conference, ts.wins, ts.losses,
+              d.name AS divisionName, d.is_default AS divisionIsDefault,
               v.name AS venueName, v.city AS venueCity
        FROM teams t
        LEFT JOIN team_seasons ts ON ts.team_id = t.id AND ts.season = ?
+       LEFT JOIN divisions d ON d.id = ts.division_id
        LEFT JOIN venues v ON v.id = t.home_venue_id
        WHERE t.state = ?
        ORDER BY t.name`, [season, state]);
@@ -215,6 +222,10 @@ router.get('/teams', async (req, res) => {
         conference: r.conference, wins: r.wins, losses: r.losses,
         record: r.wins !== null ? `${r.wins}-${r.losses}` : null,
         venue: r.venueName ? { name: r.venueName, city: r.venueCity } : null,
+        // ADDITIVE 2026-07-29. Appended LAST, omitted for single-division states
+        // — same precedent as latestSnapshot(). Oregon's or_open is is_default,
+        // so Oregon's /teams payload does not move at all.
+        ...(r.divisionName && !r.divisionIsDefault ? { division: r.divisionName } : {}),
       })),
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -277,6 +288,7 @@ router.get('/schedule/team/:slug', async (req, res) => {
         teamScore, oppScore,
         result: r.status === 'completed' ? (teamScore > oppScore ? 'W' : teamScore < oppScore ? 'L' : 'T') : null,
         venue: r.venueName ? { name: r.venueName, city: r.venueCity } : null,
+        gameType: r.gameType,   // ADDITIVE 2026-07-29 — see gameJson()
       };
     });
     res.json({ team: { slug: team.slug, name: team.name }, season, games });
