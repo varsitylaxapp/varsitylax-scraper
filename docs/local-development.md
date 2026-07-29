@@ -98,11 +98,52 @@ its placeholder rows against the LaxNumbers team list and merge duplicates
 through `alias-decisions.json` with provenance. Non-curated states have no roster
 lock, so nothing prevents a duplicate arriving from a second source.
 
-Worked example, applied 2026-07-29: `brophy_prep_az` merged into `brophy_az`.
-Same school (Brophy College Preparatory, Phoenix) reached from two directions —
-a7-classification recorded it as an *Oregon* opponent, the WHSBLA export as a
-*Washington* one. `scripts/apply-team-merges.js` repoints every reference and
-refuses to delete a row anything still points at.
+### The keeper rule
+
+**In a merge, the keeper is the row that CARRIES MORE** — seasons, games, ranking
+entries, provenance. Never the row that happened to be created first, and never
+decided by which source created it.
+
+Two worked examples, deliberately pointing in **opposite directions**:
+
+| Merge | Kept | Why |
+|---|---|---|
+| `brophy_prep_az` → **`brophy_az`** | the **a7** row | held the only game FK and the fuller canonical name |
+| `bishop_blanchet_wa` → **`blanchet_wa`** | the **export** row | 6 games vs 1, two seasons vs none, a ranking row vs none |
+
+If the rule were "prefer the league export" or "prefer the older row", one of
+these two would be wrong. Weight decides.
+
+### The sweep
+
+`scripts/reconcile-placeholders.js <STATE> --target=staging` is READ-ONLY and
+reports candidates only. **Run it at the enablement gate for every curated-state
+onboarding** — a7-era placeholders predate the roster lock everywhere a7 touched.
+
+**Design property, deliberately tuned: it OVER-REPORTS.** Matching strips generic
+words (prep/academy/catholic/college), which collides genuinely distinct schools.
+That is the correct trade: a false positive costs a human one minute of review; a
+false negative is an irreversible-feeling data bug that surfaces months later.
+Do not "improve" precision at the cost of recall.
+
+Pairs a human rules DISTINCT go in `alias-decisions.json` under `do_not_merge`,
+and the sweep **reads and suppresses them** — a rejected candidate is never
+re-proposed by a later sweep, tool, or session. Negative knowledge is knowledge.
+
+### WA result, 2026-07-29
+
+Of 16 a7-era WA placeholders, **15 were cleanly adopted** by the WHSBLA import and
+exactly **one** was a duplicate. The alias-resolution layer did its job almost
+perfectly at import time; the sweep exists for the exception.
+
+```
+LIKELY    bishop_blanchet_wa -> blanchet_wa    MERGED
+LIKELY    seattle_prep_wa    vs seattle_academy_wa   DISTINCT (also vs west_seattle_wa)
+POSSIBLE  mount_si_wa        vs mount_vernon_wa      DISTINCT
+POSSIBLE  north_creek_wa     vs north_kitsap_wa      DISTINCT
+```
+
+Re-running the sweep after recording those rulings yields **0 candidates**.
 
 ### The AZ / ID / MT / NV rows are not rosters
 

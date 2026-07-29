@@ -1,5 +1,5 @@
 {
-  "_comment": "Human-approved alias resolutions. Decisions as data, with approver and evidence. Any name a machine cannot resolve is FLAGGED, never guessed; a human ruling is recorded here and becomes the written trail. Pattern approved 2026-07-28. roster_admissions records teams ADMITTED to a roster-locked state by league authority; alias decisions resolve NAMES, admissions add MEMBERS. merges records duplicate team rows collapsed by human ruling; alias decisions resolve NAMES, admissions add MEMBERS, merges remove DUPLICATES.",
+  "_comment": "Human-approved alias resolutions. Decisions as data, with approver and evidence. Any name a machine cannot resolve is FLAGGED, never guessed; a human ruling is recorded here and becomes the written trail. Pattern approved 2026-07-28. roster_admissions records teams ADMITTED to a roster-locked state by league authority; alias decisions resolve NAMES, admissions add MEMBERS. merges records duplicate team rows collapsed by human ruling; alias decisions resolve NAMES, admissions add MEMBERS, merges remove DUPLICATES. KEEPER RULE: in a merge, the keeper is the row that CARRIES MORE \u2014 seasons, games, ranking entries, provenance \u2014 never the row that happened to be created first or by a particular source. brophy_az (kept the a7 row) and blanchet_wa (kept the export row) are worked examples pointing in opposite directions. do_not_merge records pairs a human has ruled DISTINCT; scripts/reconcile-placeholders.js reads it and suppresses them, so a rejected candidate is never re-proposed.",
   "decisions": [
     {
       "alias": "Bainbridge",
@@ -111,6 +111,72 @@
       ],
       "keep_rationale": "brophy_az holds the game FK and carries the school's full canonical name",
       "note": "Non-curated states have no roster lock, so nothing prevented this. Merging is a prerequisite gate before AZ rankings are ever enabled."
+    },
+    {
+      "keep_slug": "blanchet_wa",
+      "merge_slug": "bishop_blanchet_wa",
+      "state": "WA",
+      "approver": "Spencer",
+      "approved_on": "2026-07-29",
+      "basis": "same school reached from two directions; pre-dates the roster lock",
+      "evidence": [
+        "Bishop Blanchet High School, Seattle \u2014 the WHSBLA export lists it as 'Blanchet'",
+        "bishop_blanchet_wa seeded from a7-classification as an OREGON opponent (Lake Oswego/Riverdale @ Bishop Blanchet, canonical_source=ohsla)",
+        "blanchet_wa seeded from the WHSBLA 2026 export as a MEMBER: 6 league games, wa_private for 2026 AND 2027, 1 ranking entry",
+        "the a7 row has no team_seasons at all"
+      ],
+      "keep_rationale": "blanchet_wa carries far more \u2014 6 games vs 1, two seasons vs none, a ranking row vs none",
+      "note": "Direction is OPPOSITE to the brophy merge, deliberately. See the keeper rule."
+    }
+  ],
+  "do_not_merge": [
+    {
+      "a": "seattle_prep_wa",
+      "b": "seattle_academy_wa",
+      "state": "WA",
+      "approver": "Spencer",
+      "approved_on": "2026-07-29",
+      "reason": "distinct schools; the sweep's generic-word stripping ('prep', 'academy') collides them",
+      "evidence": [
+        "Seattle Preparatory and Seattle Academy are separate Seattle schools",
+        "Seattle Prep is the 2026 PV/Open champion in our own bracket data (beat Bellevue 14-13 OT at Starfire)",
+        "both carry seasons=2 rank=1 \u2014 both were adopted cleanly at import"
+      ]
+    },
+    {
+      "a": "seattle_prep_wa",
+      "b": "west_seattle_wa",
+      "state": "WA",
+      "approver": "Spencer",
+      "approved_on": "2026-07-29",
+      "reason": "distinct schools; shared token 'seattle' only",
+      "evidence": [
+        "runner-up match from the same sweep; recorded so it is never re-proposed"
+      ]
+    },
+    {
+      "a": "mount_si_wa",
+      "b": "mount_vernon_wa",
+      "state": "WA",
+      "approver": "Spencer",
+      "approved_on": "2026-07-29",
+      "reason": "distinct schools; shared token 'mount' only",
+      "evidence": [
+        "Mount Si is in Snoqualmie; Mount Vernon is in Skagit Valley",
+        "Mount Si is the 2026 4A champion in our bracket data"
+      ]
+    },
+    {
+      "a": "north_creek_wa",
+      "b": "north_kitsap_wa",
+      "state": "WA",
+      "approver": "Spencer",
+      "approved_on": "2026-07-29",
+      "reason": "distinct schools; shared token 'north' only",
+      "evidence": [
+        "North Creek is in Bothell; North Kitsap is in Poulsbo",
+        "the sweep itself flagged this as TIE rather than picking a keeper"
+      ]
     }
   ]
 }
