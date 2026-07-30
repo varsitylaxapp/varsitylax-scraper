@@ -70,3 +70,68 @@ cosmetic cost on a near-dead path is the right price for removing a bundled
 identity source that was active on *every* path, including healthy ones.
 
 Retires itself when v1 does. No action needed.
+
+---
+
+## Rankings trend arrows — additive backend release, before March 2027
+
+**Deferred 2026-07-29**, found during the design-spec reconciliation.
+
+`docs/design-spec-2027.html` specifies trend arrows as a rankings convention:
+`▲n` / `▼n` / `—`. **The client side is already built and shipping** — and inert,
+because every server row sets the value to zero.
+
+### What exists on the client
+
+```swift
+// RankingEntry
+let trend: Int
+
+// RankingRow.trendBadge — exactly the spec's convention, including colours
+trend > 0  →  "▲\(trend)"        .appWin      (#00C853)
+trend < 0  →  "▼\(abs(trend))"   .appLoss     (#FF6259)
+trend == 0 →  "—"                .textMuted   (tertiary)
+```
+
+Both production sources — `fetchLaxNumbers` and `fetchLaxPower` — pass a literal
+`trend: 0`, so every row in the app renders "—" and always has.
+
+**Inert-safe is proven, not assumed**: the preview fixtures carry `trend: 1` and
+`trend: -1`, so the up and down arrows are exercised and render. Nothing about the
+arrows is speculative; only the data is missing.
+
+### Why not now
+
+Every trend would be `0` in the offseason. There is no previous-snapshot delta to
+compute until rankings actually move week to week, so building it now would ship a
+column that is provably a no-op and unverifiable against real movement.
+
+### Why it matters by March 2027
+
+The first in-season Tuesday ranking swing is exactly when parents open the app
+twice a day. A rankings table that shows *movement* answers "did we go up?" without
+the reader having to remember last week's number. That is the moment the column
+earns its width — and it is a moment that arrives on a schedule, not on demand.
+
+### How
+
+Additive mini-release under the byte-identity policy:
+
+- server computes each entry's rank delta against the **previous rankings
+  snapshot** for the same `(source, season, state)` and ships it as `trend` per
+  entry, **appended last**
+- rank IMPROVEMENT is positive: moving #5 → #3 is `trend: +2`. The client already
+  reads it that way (`▲` for `> 0`), so getting the sign backwards would render
+  every rise as a fall
+- first snapshot of a season has no predecessor — omit the key or send `0`, both of
+  which the client renders as "—"
+- prove with `scripts/payload-diff.js`: additions only, nothing removed or
+  reordered, then reset the capture baseline
+- **zero client change required.** No App Store release. The arrows light up the
+  first time the field arrives non-zero.
+
+### Watch for
+
+`snapshots` needs enough history for a delta to exist. Confirm the retention and
+cadence before building: two snapshots a week apart is the minimum useful state,
+and a single snapshot per season makes the feature silently permanent-"—".
