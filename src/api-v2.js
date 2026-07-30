@@ -55,6 +55,18 @@ async function latestSnapshot(source, season, state = DEFAULT_STATE) {
       // division is 'or_open' with is_default = 1, so Oregon rows serialize with
       // exactly the keys, in exactly the order, they had before Section F.
       ...(r.divisionName && !r.divisionIsDefault ? { division: r.divisionName } : {}),
+      // ADDITIVE 2026-07-30. The camelCase name for `rank_position`.
+      //
+      // `rank_position` is the only snake_case key in v2, and it went unnoticed for as
+      // long as it did because the iOS client decodes with Swift's convertFromSnakeCase,
+      // which silently rewrites it — an iOS-flavoured tolerance, invisible to the only
+      // client that existed. A client with explicit field mapping would need an
+      // annotation on this one key and no others.
+      //
+      // `rank_position` stays: removing a key is not an additive change. It is
+      // DEPRECATED BUT PRESENT and goes when the iOS client stops reading it.
+      // New clients read `rankPosition`. See docs/api-contract.md §1.4.
+      rankPosition: r.rank_position,
     })),
   };
 }
@@ -87,7 +99,27 @@ function gameJson(r) {
   // move. A forfeit is a result AWARDED rather than played — indistinguishable from
   // a normal final without this. 10 games in 2026, all WHSBLA-sourced.
   isForfeit: !!r.isForfeit,
+    // ADDITIVE 2026-07-30. The calendar day, unambiguously.
+    //
+    // `date` is an ISO INSTANT whose 07:00Z is midnight Pacific, not a time of day,
+    // while `advancesTo.date` is a bare day — the same logical date in two formats
+    // inside one object, so comparing them directly never matches. Every consumer was
+    // therefore obliged to slice, and a consumer that instead converted to local time
+    // got the wrong day. `date` keeps its format because changing it would be
+    // breaking; this is the field to prefer. See docs/api-contract.md §1.3.
+    dateKey: dayKey(r.date),
   };
+}
+
+// The calendar DAY of a DB DATE, as 'YYYY-MM-DD'.
+//
+// The DB stores Pacific wall-clock, which mysql2 parses into the Date's UTC fields, so
+// midnight Pacific surfaces as 07:00Z and slicing the ISO string yields the correct
+// calendar day. Converting to a local zone first does NOT — it shifts the date by one
+// for anyone east of Pacific, which is every consumer outside the west coast.
+function dayKey(d) {
+  if (!d) return null;
+  return d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10);
 }
 
 // Serialize a DB DATETIME with its real Pacific offset instead of a mislabeled Z.
@@ -450,6 +482,7 @@ router.get('/schedule/team/:slug', async (req, res) => {
         venue: r.venueName ? { name: r.venueName, city: r.venueCity } : null,
         gameType: r.gameType,   // ADDITIVE 2026-07-29 — see gameJson()
           isForfeit: !!r.isForfeit,  // ADDITIVE 2026-07-29 (section J)
+        dateKey: dayKey(r.date),   // ADDITIVE 2026-07-30 — see gameJson()
       };
     });
     res.json({ team: { slug: team.slug, name: team.name }, season, games });

@@ -17,12 +17,37 @@
  * overlap and zero orphans; each WA division partitions into its single bracket.
  * Asserted here, not assumed.
  *
- *   node scripts/seed-playoff-formats.js --target=staging [--commit]
+ * STATE FILTER — `--state=OR` (repeatable, or comma-separated).
+ *
+ * WHY IT EXISTS, and it is a production-window requirement rather than a convenience.
+ * The seeder declares all six 2026 brackets and STOPS on an anchor that does not
+ * resolve, by design — an unresolvable final means the tournament changed shape and a
+ * human must look. On PROD that design fires for the wrong reason: prod holds no
+ * Washington games until stage (c), so all four WA anchors legitimately cannot resolve
+ * and the seeder would abort a window that is otherwise fine.
+ *
+ *   window #2 (prod):  --state=OR      seeds 2 brackets   ← the prod invocation
+ *   stage (c) (prod):  --state=WA      seeds 4 brackets, AFTER the WA import
+ *   staging:           no filter       seeds all 6
+ *
+ * Filtering is NOT the same as tolerating a failed anchor. Within the requested states
+ * every anchor must still resolve or the script stops. A state you did not ask for is
+ * absent; a state you did ask for is verified.
+ *
+ *   ./scripts/staging scripts/seed-playoff-formats.js [--commit]
+ *   node scripts/seed-playoff-formats.js --state=OR --commit        (prod, window #2)
  */
 const pool = require('../src/db');
 
 const COMMIT = process.argv.includes('--commit');
 const SEASON = 2026;
+
+// --state=OR --state=WA  or  --state=OR,WA ; absent = every declared state.
+const STATES = process.argv
+  .filter(a => a.startsWith('--state='))
+  .flatMap(a => a.slice('--state='.length).split(','))
+  .map(x => x.trim().toUpperCase())
+  .filter(Boolean);
 
 // The ONLY hand-entered facts: which brackets exist, what they are called, and which
 // game is each one's final (by natural key — never by id; see the migration header).
@@ -57,6 +82,15 @@ const expectedPlayIn = f => f - 2 ** Math.floor(Math.log2(f));
   try {
     await c.beginTransaction();
 
+    const brackets = STATES.length
+      ? BRACKETS.filter(b => STATES.includes(b.state))
+      : BRACKETS;
+    if (STATES.length && !brackets.length) {
+      throw new Error(`--state=${STATES.join(',')} matches no declared bracket`);
+    }
+    console.log(`  states: ${STATES.length ? STATES.join(', ') : 'ALL'}` +
+                `   brackets: ${brackets.length}/${BRACKETS.length}\n`);
+
     // Playoff games per state. WA is division-scoped, OR is statewide.
     const [all] = await c.execute(
       `SELECT g.id, DATE_FORMAT(g.game_date,'%Y-%m-%d') d, g.home_team_id h, g.away_team_id a,
@@ -82,7 +116,7 @@ const expectedPlayIn = f => f - 2 ** Math.floor(Math.log2(f));
 
     const rows = [];
 
-    for (const b of BRACKETS) {
+    for (const b of brackets) {
       const [fd, s1, s2] = b.final;
       if (!idBySlug[s1] || !idBySlug[s2]) throw new Error(`${b.key}: unknown slug in ${s1}/${s2}`);
       const pair = [s1, s2].sort();
@@ -98,7 +132,7 @@ const expectedPlayIn = f => f - 2 ** Math.floor(Math.log2(f));
     }
 
     // ONE call, per state, so overlap detection sees every bracket in that state.
-    for (const state of [...new Set(BRACKETS.map(b => b.state))]) {
+    for (const state of [...new Set(brackets.map(b => b.state))]) {
       const mine = rows.filter(r => r.state === state);
       const { assignment, orphans, overlaps } = assignBrackets(
         graphGames, mine.map(r => ({ key: r.key, finalGameId: r.finalId, pool: r.pool })));
@@ -126,7 +160,10 @@ const expectedPlayIn = f => f - 2 ** Math.floor(Math.log2(f));
       }
     }
 
-    await c.execute('DELETE FROM playoff_formats WHERE season = ?', [SEASON]);
+    // Scoped to the requested states. An unscoped DELETE would make `--state=WA` during
+    // stage (c) silently destroy the Oregon formats seeded in window #2.
+    await c.query('DELETE FROM playoff_formats WHERE season = ? AND state IN (?)',
+                  [SEASON, [...new Set(brackets.map(b => b.state))]]);
     for (const r of rows) {
       await c.execute(
         `INSERT INTO playoff_formats
@@ -137,8 +174,9 @@ const expectedPlayIn = f => f - 2 ** Math.floor(Math.log2(f));
          r.playIn, r.finalDate, r.lo, r.hi, r.sort]);
     }
 
-    const [[anchored]] = await c.execute(
-      'SELECT COUNT(*) n FROM v_playoff_format_anchors WHERE season = ?', [SEASON]);
+    const [[anchored]] = await c.query(
+      'SELECT COUNT(*) n FROM v_playoff_format_anchors WHERE season = ? AND state IN (?)',
+      [SEASON, [...new Set(brackets.map(b => b.state))]]);
     console.log(`\n  seeded ${rows.length}   anchors resolving through the view: ${anchored.n}`);
     if (anchored.n !== rows.length) {
       throw new Error(`${rows.length - anchored.n} format(s) do not resolve to a game`);

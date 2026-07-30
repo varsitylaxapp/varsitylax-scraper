@@ -73,10 +73,18 @@ Within a single playoff game object:
 directly never matches.** To resolve an `advancesTo` reference to a game in the same
 payload, take `date.slice(0, 10)` and pair it with the game's own two slugs sorted.
 
-The `07:00:00.000Z` is not a time of day. The database stores Pacific wall-clock and the
-container runs UTC, so midnight Pacific surfaces as 07:00Z (08:00Z in winter). Slicing the
-first ten characters yields the correct calendar day; converting to a local timezone first
-does not, and will shift the date by one for anyone east of Pacific.
+**The time component is an artifact of where the API process runs, and it VARIES.**
+Production runs UTC and emits `2026-03-12T00:00:00.000Z`. The same endpoint served from a
+Pacific-timezone process emits `2026-03-12T07:00:00.000Z` for the same game. Neither is a
+time of day — the column is a DATE, and the driver materialises it at local midnight.
+
+This is why `date` must never be parsed as an instant: a client that converts it to local
+time gets a different answer depending on which timezone the *server* happens to run in,
+and can land on the previous day. Take the first ten characters, or use `dateKey`.
+
+(The captures in `payload-baseline/` were taken from a Pacific-timezone process and show
+`07:00:00.000Z`. Production shows `00:00:00.000Z`. The baseline is not representative of
+prod for this one field — another reason `dateKey` exists.)
 
 **Status: fix approved, additive.** An explicit `dateKey` field (`"2026-04-29"`) is added
 in the next additive release (prod window #2). `date` keeps its current format —

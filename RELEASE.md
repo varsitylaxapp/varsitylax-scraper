@@ -246,6 +246,120 @@ no exceptions.
 
 ---
 
+## 🚨 Emergency partial-J — 2026-07-30, outage remediation
+
+**Applied to production outside a scheduled window, on Spencer's explicit authorisation.**
+
+### What was broken
+
+Three v2 endpoints returned HTTP 500 for approximately one day:
+
+```
+GET /api/v2/schedule/all         500  {"error":"Unknown column 'g.is_forfeit' in 'field list'"}
+GET /api/v2/schedule/playoffs    500  same
+GET /api/v2/schedule/team/:slug  500  same
+```
+
+`states`, `health`, `teams` and all `rankings/*` were unaffected — they do not use
+`GAME_SELECT`. Every v1 endpoint was healthy throughout. The cron kept writing
+successfully; this was a read-path break only.
+
+### Cause
+
+Commit `3607fa8` (the P5 push, 2026-07-29) put section J's **code** on prod —
+`g.is_forfeit` inside `GAME_SELECT`, which backs every game endpoint — while section J's
+**migration** stayed unapplied. `git push` auto-deploys `varsitylax-api`, so the code
+shipped the moment the branch moved.
+
+### User impact: none, by luck
+
+The shipped 1.6.0 lineage (`c4a2002`) routes every request through
+`APIClient.fetchWithFallback`, which by its own contract falls back to v1 on "ANY failure
+(transport error, non-2xx status, or decode failure)". v1 was healthy, so Oregon users
+were transparently served v1 data for a day, in the offseason.
+
+**That safety net no longer exists.** P2 shrank the fallback to `/schedule/team/:slug`
+alone — correctly, because v1 cannot serve rankings or playoffs by construction. The same
+incident after the next App Store release would be fully user-visible.
+
+### What was applied
+
+Section J statements **1 and 6 only**, verbatim, nothing added or altered:
+
+```sql
+ALTER TABLE games ADD COLUMN is_forfeit BOOLEAN NOT NULL DEFAULT 0;
+ALTER TABLE games ADD KEY idx_games_forfeit (season, is_forfeit);
+```
+
+Section J's statements 2–5 (the forfeit backfill and `note=` cleanup) were **not**
+applied and were verified to be no-ops on prod at the time: `note=Forfeit` 0 rows,
+`note=Overtime` 0 rows, `status_note LIKE 'note=%'` 0 rows. Those artifacts are
+WHSBLA-only and prod holds no Washington games. Window #2 must still run them, and must
+tolerate the column and index already existing.
+
+Rollback anchor: full `mysqldump` taken immediately before, 516K, 18 base tables + 1
+view, terminator present, per-table row counts verified against prod's live catalogue
+(`games` 354, `team_aliases` 193). **Restorability was NOT verified** — this machine has
+`mysql-client` only, no server binary and no Docker, so no restore target existed. The
+change is one additive column with a trivial inverse, which is why it proceeded anyway;
+the gap is recorded rather than glossed.
+
+Prod `sql_mode` confirmed at the time: `NO_ENGINE_SUBSTITUTION` (no STRICT), as the
+runbook warns.
+
+### Verification
+
+All three endpoints returned 200 with real payloads immediately after; `schedule/all`
+354 games, `schedule/playoffs` 38, `schedule/team/oes` 18. Full sweep via
+`./scripts/prod-smoke.sh`: **16/16 endpoints healthy**. `isForfeit` appears appended
+last, 0 true across 354 Oregon games — the planned additive change, arriving early and
+landing additively.
+
+---
+
+## 🔬 Postmortem — why every green was true and it broke anyway
+
+**Every check passed, and every check was irrelevant.** Before the P5 push: unit tests
+green, payload diff additions-only, capture baseline byte-identical, seeder acceptance
+clean, Oregon regression gate clean. All of them true. All of them run against
+**staging**, where `is_forfeit` exists.
+
+Staging validates code against the schema the code was written for. That is a real and
+useful question. It is not the question that matters at push time, which is: **does this
+code run against the schema production actually has?** Nothing asked that, so nothing
+answered it — and the additive-payload machinery, which is genuinely good at what it
+does, gave a confident green that was about a different database.
+
+The failure is structural, not an oversight. A migration-coupled release has two halves
+that can be deployed independently, and every guard we had watched one half.
+
+### What closes it
+
+1. **`./scripts/prod-smoke.sh` — post-deploy, mandatory.** Hits all 16 endpoints on the
+   live host and fails on anything that is not the documented status. It asserts on real
+   HTTP responses, so it has zero false positives by construction, and it would have
+   caught this within seconds of the deploy rather than a day later. Proven able to fail
+   (16/16 FAIL against a dead host).
+2. **Pre-push schema rehearsal — HEAD's API booted against a restored prod dump.** The
+   stronger gate, and the one this postmortem really demands: not staging, prod's own
+   schema. It catches what a smoke test can only catch *after* deploying.
+   **BLOCKED: requires a MySQL server.** This machine has `mysql-client` only — no
+   `mysqld`, no Docker. Installing one is a prerequisite for this gate AND for window
+   #2's `mysql:8.0.41` rehearsal, which is blocked for the same reason.
+3. **A static SQL/schema conformance checker was attempted and abandoned.** Parsing SQL
+   out of `src/` and checking columns against `information_schema` reached 4 false
+   positives against a healthy database after two rounds of tightening — it matched
+   JavaScript property access and prose in comments. Recorded so nobody rebuilds it: a
+   gate that cries wolf gets switched off, which is worse than no gate.
+
+### The rule
+
+**A phase exit may not push migration-coupled code until it has been run against prod's
+schema, not staging's.** "Rehearse at prod's `sql_mode`" was the specific case; this is
+the general one.
+
+---
+
 ## Window #2 — playoff graph, stale fixtures, forfeits
 
 **Status: DRAFT, awaiting Spencer's window. Nothing pushed. No prod migration.**
@@ -279,7 +393,7 @@ Stage (c) (Washington content) remains separate and is not required for TestFlig
 
 | # | change | kind |
 |---|---|---|
-| 1 | `section-j-forfeit-and-note-cleanup.sql` | schema + backfill |
+| 1 | `section-j-forfeit-and-note-cleanup.sql` | schema + backfill — ⚠️ **statements 1 and 6 are ALREADY APPLIED** (emergency partial-J, above). Run statements 2–5 only, or make the file idempotent first. Re-running `ADD COLUMN` as-is will ERROR 1060. |
 | 2 | `section-k-stale-fixtures.sql` | schema (enum, `stale_exemptions`, `v_stale_watch`) |
 | 3 | `section-l-playoff-formats.sql` | schema (`playoff_formats`, `v_playoff_format_anchors`) |
 | 4 | `scripts/backfill-oregon-playoff-type.js --commit` | data — types Oregon's 38 completed playoff games |
@@ -323,7 +437,7 @@ Captured before and after with `scripts/capture-payloads.sh`, diffed with
 | 1 | `/api/v2/schedule/all?state=OR` | **354 → 345 games** (−9) | **YES — see below** |
 | 2 | `/api/v2/schedule/playoffs` | gains `bracketKey`, `round`, `advancesTo` on every game | yes, enables the feature |
 | 3 | `/api/v2/playoff-formats` | **new endpoint**, previously 404 | yes, enables the feature |
-| 4 | all game endpoints | gain `isForfeit` | Oregon has 0 forfeits — no visible change |
+| 4 | all game endpoints | ~~gain `isForfeit`~~ — **already landed** 2026-07-30 with emergency partial-J | none |
 | 5 | `/rankings/*` | gains `rankPosition` alongside `rank_position` | no |
 | 6 | all game endpoints | gain `dateKey` | no |
 | — | rankings order/content, `/teams`, `/states`, per-team schedules | **byte-identical** | — |
@@ -368,7 +482,7 @@ Identical in shape to stage (b); only the payload differs.
  1. Fresh full mysqldump of prod, verified restorable        [rollback anchor]
  2. Capture prod baseline (scripts/capture-payloads.sh)      [before/]
  3. STOP varsitylax-cron                                     ← window opens
- 4. Apply sections J, K, L to prod
+ 4. Apply sections J (statements 2-5 ONLY — see emergency partial-J), K, L to prod
  5. Backfills, each --commit, each verified after:
       backfill-oregon-playoff-type.js   → 38 Oregon playoff games typed
       markStaleFixtures                 → 9 fixtures marked stale
@@ -378,7 +492,9 @@ Identical in shape to stage (b); only the payload differs.
  7. Confirm both services boot; check the [db] target=PROD line
  8. RESTART varsitylax-cron                                  ← window closes
  9. Capture prod again → diff against step 2; compare to the table above
-10. Watch one full cron cycle: scrape_log status=success, AND the 9 stale rows
+10. ./scripts/prod-smoke.sh — 16/16 endpoints healthy. MANDATORY, immediately after
+    step 6. This is the check whose absence caused the 2026-07-30 outage.
+11. Watch one full cron cycle: scrape_log status=success, AND the 9 stale rows
     are NOT revived (the resurrection guard in dual-write.js)
 ```
 
