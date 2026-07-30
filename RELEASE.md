@@ -377,7 +377,7 @@ the general one.
 
 ## Window #2 — playoff graph, stale fixtures, forfeits
 
-**Status: ✅ EXECUTED 2026-07-30 on Spencer's explicit go. All 10 commits pushed and
+**Status: ✅ CLOSED 2026-07-30. Executed on Spencer's explicit go. All 10 commits pushed and
 deployed. Sections J(2-5)/K/L applied. Backfills committed. 18/18 endpoints healthy and
 every written expected-diff assertion verified against live prod.**
 
@@ -490,6 +490,26 @@ than read off a log:
 | `rankPosition` present | 41/41 ✓ |
 | `playoffSource` becomes `game_type` | ✓ |
 | both Oregon finals share one day | ✓ |
+
+### ✅ Cron-cycle watch — the closing gate, 2026-07-30
+
+The window stayed open until the resurrection guard was proven on PROD, not on staging.
+
+```
+cycle landed          2026-07-30 22:03:39Z  (schedule 0 */2 * * *, on time)
+scrape_log            #3731 laxnumbers-v2/OR success 41
+                      #3732 laxpower-v2/OR   success 41
+                      #3733 ohsla-v2/OR      success 354
+the nine stale rows   3 8 17 31 71 140 257 288 360 — ALL still 'stale'
+```
+
+**The number that matters is 354.** OHSLA's feed still lists every one of the nine
+fixtures — the source is additive-only and never retires anything — so the scraper
+re-asserted all 354 rows and the nine did NOT flip back to `scheduled`. That is the
+`ON DUPLICATE KEY UPDATE` guard in `src/dual-write.js` working against live upstream
+data, which is the only place it could ever have been proven.
+
+Without the guard this window would have silently undone itself within two hours.
 
 ### Requirements carried from window #1
 
