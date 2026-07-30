@@ -89,3 +89,55 @@ There is no evidence Sportability behaves better, and the rule applies to both
 sources for that reason. `v_stale_watch` surfaces fixtures ageing past 7 days — before
 the 14-day mark hides them — because a played-but-unscored game is data-entry lag we
 want to see, not bury.
+
+---
+
+## Real brackets are not balanced, and `play_in_games` cannot describe them
+
+Discovered while validating `/schedule/playoffs`'s new `round` field against what a
+textbook single-elimination bracket should look like. My expectation was wrong; the data
+is right.
+
+All six 2026 brackets ARE clean single elimination — verified structurally, not assumed:
+every team loses at most once, distinct teams == games + 1, and every game's two slots
+are accounted for by either a team entering the bracket or a feeder's winner. Zero
+malformed games across 81 playoff games.
+
+But the trees are **lopsided**, and two of them are lopsided in a way arithmetic on
+`field_size` cannot express:
+
+| bracket | field | `play_in_games` | max round | teams enter at |
+|---|---|---|---|---|
+| cascade_cup | 16 | 0 | 3 | r3: 16 — perfectly balanced |
+| championship | 24 | 8 | 4 | r4: 16, r3: 8 |
+| wa_3a | 9 | 1 | 3 | r3: 2, r2: 7 |
+| wa_2a | 5 | 1 | 2 | r2: 2, r1: 3 |
+| **wa_private** | **16** | **0** | **4** | r4: 4, r3: 10, **r2: 2** |
+| **wa_4a** | **17** | **1** | **5** | r5: 2, r4: 3, r3: 10, **r2: 2** |
+
+`wa_private` has a field of 16 — a power of two, so `play_in_games` computes to 0 — yet
+it plays two preliminary games and byes two teams straight to the quarterfinals. `wa_4a`
+reaches depth 5 where a balanced 17-team field maxes at 4. `play_in_games` is
+`field_size - 2^floor(log2(field_size))`; it assumes the only irregularity is a single
+play-in column, and for these two that assumption is false.
+
+### Consequence for the client, and the reason `round` is server-shipped
+
+**Never compute bracket layout from `field_size` and `play_in_games`.** Lay columns out
+from the maximum `round` actually present, and place each game at its own `round`. A
+client doing the arithmetic would have drawn 4A and PV/Open with the wrong number of
+columns and every cell in the wrong one — which is precisely the class of error that
+`buildBrackets` reconstructing a field from rankings belonged to.
+
+The two stored numbers keep their jobs: `field_size` is how many teams qualified (17 of
+4A's 27, so it can never come from division membership), and `play_in_games` is a
+declared property of the format that the seeder cross-checks. Neither is a layout
+instruction.
+
+### Byes are an absence, never a row
+
+A bye is a team whose first game is at a shallower round than the bracket's deepest —
+`wa_private`'s two quarterfinal entrants. Nothing in `playoff_formats` or
+`/schedule/playoffs` represents one, and nothing should: the absence of a round-3 game
+for that team *is* the bye. See `scripts/test-playoff-graph.js`, which asserts no
+placeholder game is invented.

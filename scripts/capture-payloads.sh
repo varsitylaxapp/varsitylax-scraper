@@ -53,6 +53,9 @@ grab "/api/v2/schedule/team/oes?season=$SEASON"                "v2_sched_team_oe
 grab "/api/v2/schedule/team/mount_si_wa?season=$SEASON&state=WA" "v2_sched_team_mountsi"
 grab "/api/v2/teams?season=2027&state=WA"                      "v2_teams_2027_WA"
 grab "/api/v2/playoff-formats?season=2027&state=WA"            "v2_formats_2027_WA"
+# Covers the graph's no-declared-formats branch: 2027 has classifications but no
+# playoff rows, so bracketKey/round/advancesTo must be absent rather than a 500.
+grab "/api/v2/schedule/playoffs?season=2027&state=WA"          "v2_sched_po_2027_WA"
 
 # ── v1 (sunsetting, still the /schedule/team fallback) ──────────────────────
 grab "/api/rankings/laxnumbers?season=$SEASON" "v1_rank_ln"

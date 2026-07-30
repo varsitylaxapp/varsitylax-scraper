@@ -7,6 +7,7 @@
 const express = require('express');
 const db = require('./db');
 const { DEFAULT_STATE, isValidState, listStates } = require('./config/states');
+const { assignBrackets } = require('./playoff-graph');
 
 const router = express.Router();
 const SEASON = () => parseInt(process.env.SEASON || '2026');
@@ -338,16 +339,90 @@ router.get('/schedule/playoffs', async (req, res) => {
            ORDER BY g.game_date, g.id`,
           [season, start, state, state]);
 
+    const games = rows.map(gameJson);
+    await attachGraph(games, rows, season, state);
+
     res.json({
       season,
       // Reported so a consumer can tell WHICH definition produced this list rather
       // than inferring it from the shape of the data.
       playoffSource: useColumn ? 'game_type' : 'date_window',
       playoffsStart: useColumn ? null : start,
-      games: rows.map(gameJson),
+      games,
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+// ── the playoff graph, attached to /schedule/playoffs games ──────────────────
+// ADDITIVE 2026-07-29. THE SERVER SHIPS THE GRAPH, THE CLIENT ONLY DRAWS IT:
+// bracketKey, round, advancesTo — appended last, in that order, on every game.
+//
+// `advancesTo` is the load-bearing one and the least obvious. bracketKey and round
+// tell you which column a cell sits in; they do not tell you which two cells feed the
+// one to their right. Drawing connectors needs that edge, and a client left to infer it
+// would reconstruct this whole partition — which is the derivation this endpoint exists
+// to centralise. With all three, the client is purely presentational.
+//
+// Games with no assignment get all three as NULL rather than omitted, so the field set
+// is uniform and a decoder never has to distinguish "absent" from "unassigned".
+async function attachGraph(games, rows, season, state) {
+  for (const g of games) { g.bracketKey = null; g.round = null; g.advancesTo = null; }
+  try {
+    const [formats] = await db.execute(
+      `SELECT bracket_key, division_id, final_game_id
+         FROM v_playoff_format_anchors
+        WHERE season = ? AND state = ? ORDER BY sort_order, bracket_key`, [season, state]);
+    if (!formats.length) return;   // no declared brackets for this state/season
+
+    // Division by team SLUG, since GAME_SELECT carries slugs and not team ids.
+    // A game's division is its HOME side's, matching the seeder.
+    const [divRows] = await db.execute(
+      `SELECT t.slug, ts.division_id AS division
+         FROM teams t JOIN team_seasons ts ON ts.team_id = t.id AND ts.season = ?
+        WHERE ts.division_id IS NOT NULL`, [season]);
+    const divOf = new Map(divRows.map(d => [d.slug, d.division]));
+
+    // The DB stores Pacific wall-clock, which mysql2 parses into the Date's UTC
+    // fields — so slicing the ISO date is the correct calendar day here, not an
+    // off-by-one. (Same quirk pacificISO() exists to work around.)
+    const day = d => (d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10));
+    const graphGames = rows.map(r => ({
+      id: r.id, date: day(r.date),
+      home: r.homeSlug, away: r.awaySlug,
+      homeScore: r.homeScore, awayScore: r.awayScore,
+      homeState: r.homeState, awayState: r.awayState,
+    }));
+
+    const brackets = formats.map(f => ({
+      key: f.bracket_key,
+      finalGameId: f.final_game_id,
+      // A division bracket claims only its division's games. A statewide bracket
+      // (Oregon's two) claims in-state games only — a cross-border game appears in
+      // this feed because one side is in-state, but it is nobody's playoff game.
+      pool: f.division_id
+        ? (g => divOf.get(g.home) === f.division_id)
+        : (g => g.homeState === state && g.awayState === state),
+    }));
+
+    const { assignment, orphans, overlaps } = assignBrackets(graphGames, brackets);
+    for (const g of games) {
+      const a = assignment.get(g.id);
+      if (!a) continue;
+      g.bracketKey = a.bracketKey; g.round = a.round; g.advancesTo = a.advancesTo;
+    }
+    // Loud, but not fatal to the request: a flat list of real games beats a 500.
+    // The seeder is where an orphan is a hard stop; here it is a signal to a human
+    // that the tournament changed shape since the format was seeded.
+    if (orphans.length || overlaps.length) {
+      console.warn(`[api-v2] playoff graph ${state}/${season}: ${orphans.length} orphan(s) ` +
+        `[${orphans.map(o => o.id).join(',')}], ${overlaps.length} overlap(s)`);
+    }
+  } catch (err) {
+    // A graph failure must never take the games list down with it. The three fields
+    // stay null and the client renders a flat list.
+    console.error(`[api-v2] playoff graph failed for ${state}/${season}:`, err.message);
+  }
+}
 
 // ── GET /api/v2/schedule/team/:slug ──────────────────────────────────────────
 // Per-team perspective derived from neutral rows (shape the iOS team page wants).

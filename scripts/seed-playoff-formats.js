@@ -41,31 +41,12 @@ const BRACKETS = [
     final: ['2026-05-23', 'seattle_prep_wa', 'bellevue_wa'], sort: 3 },
 ];
 
-const winnerOf = g => (g.hs > g.as_ ? g.h : g.a);
-
-/** Games reachable backward from `finalId` along winner-advancement edges. */
-function reachable(games, finalId) {
-  const byDate = [...games].sort((p, q) => (p.d < q.d ? -1 : p.d > q.d ? 1 : p.id - q.id));
-  const feeders = new Map();
-  for (const x of byDate) {
-    const w = winnerOf(x);
-    // The winner's NEXT playoff appearance is the game this one feeds.
-    const next = byDate.find(y => y.d > x.d && (y.h === w || y.a === w));
-    if (next) {
-      if (!feeders.has(next.id)) feeders.set(next.id, []);
-      feeders.get(next.id).push(x.id);
-    }
-  }
-  const seen = new Set();
-  const stack = [finalId];
-  while (stack.length) {
-    const id = stack.pop();
-    if (seen.has(id)) continue;
-    seen.add(id);
-    (feeders.get(id) || []).forEach(p => stack.push(p));
-  }
-  return seen;
-}
+// The walk itself lives in src/playoff-graph.js, shared with /schedule/playoffs.
+// It was duplicated here first; that is exactly the drift this project has already been
+// bitten by, so the seeder and the endpoint now derive from ONE implementation. If the
+// partition is wrong, it is wrong in both places at once and this script's acceptance
+// assertions catch it before anything ships.
+const { assignBrackets } = require('../src/playoff-graph');
 
 const expectedPlayIn = f => f - 2 ** Math.floor(Math.log2(f));
 
@@ -91,51 +72,56 @@ const expectedPlayIn = f => f - 2 ** Math.floor(Math.log2(f));
     const [teams] = await c.execute('SELECT id, slug FROM teams');
     const idBySlug = Object.fromEntries(teams.map(t => [t.slug, t.id]));
 
-    const assignedByState = {};   // state -> Map(gameId -> bracketKey)
+    // Shape the rows for the shared graph module: team identity is the SLUG.
+    const graphGames = all.map(g => ({
+      id: g.id, date: g.d, home: g.hslug, away: g.aslug,
+      homeScore: g.hs, awayScore: g.as_,
+      homeState: g.hstate, awayState: g.astate, division: g.division,
+    }));
+    const byId = new Map(graphGames.map(g => [g.id, g]));
+
     const rows = [];
 
     for (const b of BRACKETS) {
-      // Pool: WA brackets draw from their division; OR brackets from all OR games.
-      const pool_ = b.division_id
-        ? all.filter(g => g.division === b.division_id)
-        : all.filter(g => g.hstate === b.state && g.astate === b.state);
-
       const [fd, s1, s2] = b.final;
-      const [lo, hi] = [idBySlug[s1], idBySlug[s2]].sort((x, y) => x - y);
-      if (!lo || !hi) throw new Error(`${b.key}: unknown slug in ${s1}/${s2}`);
-      const final = pool_.find(g => g.d === fd &&
-        Math.min(g.h, g.a) === lo && Math.max(g.h, g.a) === hi);
-      if (!final) throw new Error(`${b.key}: ANCHOR DID NOT RESOLVE — no ${fd} game between ${s1} and ${s2}. ` +
-        'Either the final moved or the pair is wrong. Stopping rather than guessing.');
-
-      const games = reachable(pool_, final.id);
-      const fieldSize = games.size + 1;                 // single elimination
-      const playIn = expectedPlayIn(fieldSize);
-
-      (assignedByState[b.state] ||= new Map());
-      for (const id of games) {
-        const prev = assignedByState[b.state].get(id);
-        if (prev && prev !== b.key) {
-          throw new Error(`OVERLAP: game #${id} claimed by both ${prev} and ${b.key}`);
-        }
-        assignedByState[b.state].set(id, b.key);
-      }
-
-      console.log(`  ${b.state} ${b.key.padEnd(13)} final #${final.id}  ` +
-        `${games.size} games → field ${fieldSize}, play-in ${playIn}`);
-      rows.push({ ...b, fieldSize, playIn, finalDate: fd, lo: s1 < s2 ? s1 : s2, hi: s1 < s2 ? s2 : s1 });
+      if (!idBySlug[s1] || !idBySlug[s2]) throw new Error(`${b.key}: unknown slug in ${s1}/${s2}`);
+      const pair = [s1, s2].sort();
+      const pool = b.division_id
+        ? (g => g.division === b.division_id)
+        : (g => g.homeState === b.state && g.awayState === b.state);
+      const final = graphGames.find(g =>
+        pool(g) && g.date === fd && [g.home, g.away].sort().join('|') === pair.join('|'));
+      if (!final) throw new Error(`${b.key}: ANCHOR DID NOT RESOLVE — no ${fd} game between ` +
+        `${s1} and ${s2}. Either the final moved or the pair is wrong. Stopping rather than guessing.`);
+      rows.push({ ...b, finalId: final.id, pool,
+                  finalDate: fd, lo: pair[0], hi: pair[1] });
     }
 
-    // ── acceptance: partition, no orphans, no overlaps ──
-    console.log('');
-    for (const [state, assigned] of Object.entries(assignedByState)) {
-      const statePool = all.filter(g =>
-        state === 'OR' ? (g.hstate === 'OR' && g.astate === 'OR')
-                       : BRACKETS.some(b => b.state === state && b.division_id === g.division));
-      const orphans = statePool.filter(g => !assigned.has(g.id));
-      console.log(`  ${state}: ${assigned.size}/${statePool.length} games assigned, ${orphans.length} orphan(s)`);
+    // ONE call, per state, so overlap detection sees every bracket in that state.
+    for (const state of [...new Set(BRACKETS.map(b => b.state))]) {
+      const mine = rows.filter(r => r.state === state);
+      const { assignment, orphans, overlaps } = assignBrackets(
+        graphGames, mine.map(r => ({ key: r.key, finalGameId: r.finalId, pool: r.pool })));
+
+      for (const r of mine) {
+        const size = [...assignment.values()].filter(a => a.bracketKey === r.key).length;
+        r.fieldSize = size + 1;                        // single elimination
+        r.playIn = expectedPlayIn(r.fieldSize);
+        console.log(`  ${r.state} ${r.key.padEnd(13)} final #${r.finalId}  ` +
+          `${size} games → field ${r.fieldSize}, play-in ${r.playIn}`);
+      }
+
+      // ── acceptance: partition, no orphans, no overlaps ──
+      const claimed = graphGames.filter(g => mine.some(r => r.pool(g)));
+      console.log(`  ${state}: ${assignment.size}/${claimed.length} games assigned, ` +
+        `${orphans.length} orphan(s), ${overlaps.length} overlap(s)\n`);
+      if (overlaps.length) {
+        overlaps.forEach(o => console.log(`      OVERLAP #${o.id} claimed by ${o.claimedBy.join(' and ')}`));
+        throw new Error(`${state}: ${overlaps.length} overlapping game(s) — stop-and-report`);
+      }
       if (orphans.length) {
-        orphans.forEach(g => console.log(`      ORPHAN #${g.id} ${g.d} ${g.hslug} ${g.hs}-${g.as_} ${g.aslug}`));
+        orphans.forEach(o => { const g = byId.get(o.id);
+          console.log(`      ORPHAN #${g.id} ${g.date} ${g.home} ${g.homeScore}-${g.awayScore} ${g.away}`); });
         throw new Error(`${state}: ${orphans.length} orphan game(s) — stop-and-report, not a heuristic`);
       }
     }
