@@ -78,8 +78,11 @@ container runs UTC, so midnight Pacific surfaces as 07:00Z (08:00Z in winter). S
 first ten characters yields the correct calendar day; converting to a local timezone first
 does not, and will shift the date by one for anyone east of Pacific.
 
-This is a wart. Tracked as a candidate additive fix — add an explicit `dateKey` field
-rather than change `date`, which would be breaking.
+**Status: fix approved, additive.** An explicit `dateKey` field (`"2026-04-29"`) is added
+in the next additive release (prod window #2). `date` keeps its current format —
+changing it would be breaking, and this API does not make breaking changes (§7).
+
+Until then, slice. After then, prefer `dateKey` and treat `date` as legacy.
 
 ### 1.4 One key is snake_case in an otherwise camelCase payload
 
@@ -90,8 +93,16 @@ It has gone unnoticed because the iOS client decodes with Swift's
 tolerance**, exactly the class of thing this document exists to eliminate. A client using
 explicit field mapping needs an annotation on this one field and no others.
 
-Tracked as a candidate additive fix: emit `rankPosition` alongside, retire
-`rank_position` once iOS stops reading it.
+**Status: DEPRECATED BUT PRESENT.** `rankPosition` will be emitted alongside it in the
+next additive release (prod window #2). `rank_position` stays until the iOS client stops
+reading it — removing a key is not an additive change, so it cannot simply disappear.
+
+**New clients should read `rankPosition` and ignore `rank_position`.** Until the additive
+release lands, read `rank_position` and expect the rename.
+
+This one was found by writing this document, not by a bug report, and that is the whole
+argument for the document existing: the only current client papers over it automatically,
+so nothing would ever have surfaced it.
 
 ---
 

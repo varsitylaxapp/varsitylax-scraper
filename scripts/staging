@@ -1,0 +1,40 @@
+#!/bin/bash
+# Run any node script against STAGING, structurally.
+#
+#   ./scripts/staging scripts/seed-playoff-formats.js
+#   ./scripts/staging -e "…"                       # ad-hoc probes too
+#
+# WHY THIS EXISTS. `--target=staging` was a flag you had to remember on every single
+# invocation, and `src/db` defaults to PROD when it is absent. That is a default that
+# punishes forgetting, and on 2026-07-30 it was forgotten: a series of ad-hoc `node -e`
+# probes intended for staging ran against production. They were read-only and changed
+# nothing, but they produced a false alarm — sections J/K/L appeared to have vanished
+# from "staging" when in fact prod's correct state was being read — and the only thing
+# that would have caught it immediately was the `[db]` boot line, which had been piped
+# through `grep -v` at the time.
+#
+# So: the target becomes STRUCTURAL rather than remembered. Use this wrapper and it
+# cannot be omitted.
+#
+# THE BOOT LINE IS NEVER FILTERED. `src/db` prints
+#   [db] target=STAGING host=… db=… user=…
+# on startup, to stderr. Do not `grep -v` it, do not redirect stderr to /dev/null, do not
+# `tail` past it. It is the only thing that distinguishes staging from prod at a glance,
+# and the one incident where it was suppressed is the one incident where the wrong
+# database was read. Filtering it does not make output tidier; it makes it unverifiable.
+#
+# There is deliberately NO `./scripts/prod` counterpart. Prod is reached by omitting the
+# flag, which keeps it a conscious act rather than a symmetric convenience — and every
+# prod probe runs inside a transaction with an explicit rollback, no exceptions, even
+# ones that "should fail".
+
+set -euo pipefail
+[ $# -gt 0 ] || { echo "usage: ./scripts/staging <node-script.js|-e '…'> [args…]"; exit 1; }
+
+cd "$(dirname "$0")/.."
+# DB_TARGET, not the --target flag. src/db honours both, but the flag is a positional
+# argument and node parses anything after `-e "…"` as a NODE option, so the wrapper
+# would work for script files and fail for ad-hoc probes — which are exactly the
+# invocations that went to prod by accident. An env var is position-independent and
+# works for every form.
+exec env DB_TARGET=staging node "$@"

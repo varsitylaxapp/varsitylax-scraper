@@ -4,6 +4,10 @@
 Awaiting Spencer's window announcement. No push has occurred. No prod migration
 has occurred.**
 
+> **A SECOND WINDOW NOW EXISTS.** Window #2 (playoff graph, stale fixtures, forfeits)
+> is drafted below and is a **prerequisite of the TestFlight milestone** — without it
+> Oregon's Playoffs tab is empty for testers. Read both before scheduling either.
+
 Sixteen commits sit unpushed on `main`. This is one **coupled** release: the
 code at HEAD requires the Section F, F2, F3, F4 and G schema, and the schema is inert without the code.
 Pushing alone would deploy migration-dependent code against an unmigrated prod
@@ -239,6 +243,176 @@ A bare `INSERT` used as a "this should fail" probe **succeeded** on prod and
 wrote a garbage row (removed, verified). A should-fail probe is exactly the case
 where the environment surprises you. `START TRANSACTION` … `ROLLBACK`, always,
 no exceptions.
+
+---
+
+## Window #2 — playoff graph, stale fixtures, forfeits
+
+**Status: DRAFT, awaiting Spencer's window. Nothing pushed. No prod migration.**
+
+Seven commits sit unpushed on `main` (`e73f216`…`27f179d`). Like window #1 this is one
+**coupled** release: the code at HEAD requires sections J, K and L, and the schema is
+inert without the code.
+
+### 🔴 Why this cannot be a bundle-push
+
+`git push` auto-deploys `varsitylax-api` (step 6 of stage (b) records this). HEAD's
+`GAME_SELECT` — which backs **every** game endpoint, not just the new playoff routes —
+selects `g.is_forfeit`, a column prod does not have. `src/api-v2.js` also references
+`playoff_formats` (5×) and `status = 'stale'` (4×).
+
+Pushing without migrating first does not degrade the playoff features. It **500s the
+entire v2 API** for the shipped Oregon app. That is the same hazard window #1 was written
+to sequence, with three more sections in it.
+
+### 🔗 This is a PREREQUISITE of the TestFlight milestone
+
+The P7 TestFlight build points Release at **prod**. The new bracket renderer takes its
+structure from `bracketKey` / `round` / `advancesTo` and its bracket names from
+`/api/v2/playoff-formats`. Without this window, **Oregon's Playoffs tab is empty for
+testers** — not degraded, empty, because `buildBrackets` no longer exists to fall back to.
+
+So window #2 slots **before or alongside** the app release. It is not housekeeping.
+Stage (c) (Washington content) remains separate and is not required for TestFlight.
+
+### What ships
+
+| # | change | kind |
+|---|---|---|
+| 1 | `section-j-forfeit-and-note-cleanup.sql` | schema + backfill |
+| 2 | `section-k-stale-fixtures.sql` | schema (enum, `stale_exemptions`, `v_stale_watch`) |
+| 3 | `section-l-playoff-formats.sql` | schema (`playoff_formats`, `v_playoff_format_anchors`) |
+| 4 | `scripts/backfill-oregon-playoff-type.js --commit` | data — types Oregon's 38 completed playoff games |
+| 5 | stale backfill (`markStaleFixtures`) | data — marks 9 Oregon fixtures `stale` |
+| 6 | `scripts/seed-playoff-formats.js --commit` | data — 6 brackets, natural-key anchors |
+| 7 | `dateKey` + `rankPosition` additive keys | code — **not yet written**; see below |
+| 8 | `git push` → deploys api + cron | code |
+
+Items 4–6 are **idempotent and dry-run by default**; each has been exercised on staging.
+Item 7 is the two contract warts (`docs/api-contract.md` §1.3, §1.4) approved as additive
+fixes. They must be written, payload-diffed and baseline-reset **before** the window, not
+during it — a window is for executing a rehearsed plan, not authoring code.
+
+### Requirements carried from window #1
+
+These are not optional and each exists because window #1 nearly failed on it.
+
+1. **Rehearsal on `mysql:8.0.41` AT PROD'S `sql_mode`.** Prod (DreamHost) runs
+   `NO_ENGINE_SUBSTITUTION` — **no STRICT**. Railway and the rehearsal container default
+   to `STRICT_TRANS_TABLES`. Same version, different mode, different database.
+   `SET GLOBAL sql_mode = '<prod's value>'` immediately after boot, verified with
+   `SELECT @@GLOBAL.sql_mode`, **before restoring anything**. Section K modifies a
+   status ENUM — exactly the DDL class where mode differences bite.
+2. **UTC-aware cron timing.** The cron runs every 2 hours; the container runs UTC while
+   the DB stores Pacific wall-clock. Compute the next cycle in UTC and open the window
+   just *after* one completes. Do not reason in local time.
+3. **Every prod probe inside a transaction with an explicit rollback** — no exceptions,
+   including probes that "should fail".
+4. **Never filter the `[db]` boot line.** Use `./scripts/staging` for anything aimed at
+   staging; prod is reached only by deliberately omitting it. (Added after 2026-07-30,
+   when suppressed boot lines made prod reads look like staging reads.)
+
+### Written expected diff
+
+Captured before and after with `scripts/capture-payloads.sh`, diffed with
+`scripts/payload-diff.js` against `payload-baseline/`. Three changes are expected and
+**everything else must be byte-identical**.
+
+| # | endpoint | expected change | user-visible? |
+|---|---|---|---|
+| 1 | `/api/v2/schedule/all?state=OR` | **354 → 345 games** (−9) | **YES — see below** |
+| 2 | `/api/v2/schedule/playoffs` | gains `bracketKey`, `round`, `advancesTo` on every game | yes, enables the feature |
+| 3 | `/api/v2/playoff-formats` | **new endpoint**, previously 404 | yes, enables the feature |
+| 4 | all game endpoints | gain `isForfeit` | Oregon has 0 forfeits — no visible change |
+| 5 | `/rankings/*` | gains `rankPosition` alongside `rank_position` | no |
+| 6 | all game endpoints | gain `dateKey` | no |
+| — | rankings order/content, `/teams`, `/states`, per-team schedules | **byte-identical** | — |
+
+**Confirm 354 at step 2, do not assume it.** The count comes from the window brief and is
+consistent with staging (which reads 345 with the stale rule applied), but prod's own
+baseline capture is the authority. If step 2 shows a different starting count, the delta
+must still be exactly the nine rows listed below — a different delta means something else
+changed and the window stops.
+
+#### ⚠️ Change 1 is user-visible and DELIBERATE
+
+Oregon's Scores feed loses **nine games**: 354 → 345. They are the nine phantom fixtures
+— scheduled, never scored, months past their date — that OHSLA never retires because the
+source is additive-only. Marking them `stale` is a **fix**: they were never played, and
+today the shipped app shows them as though they might still be.
+
+But a shipped Oregon user's Scores list gets shorter, and that must not arrive as a
+surprise. It is a third deliberate Oregon-visible change (after the context line and the
+Playoffs tab) and belongs in the release notes — recorded in
+`VarsityLaxApp/docs/user-visible-changes.md`.
+
+The nine, all Oregon, all `scheduled` with no score:
+
+```
+2026-03-12  camas_wa v central_catholic      2026-04-10  lincoln v hood_river
+2026-03-14  mt_view v burns                  2026-04-10  mountainside v forest_grove
+2026-03-17  skyview_wa v hillsboro           2026-04-10  sunset v summit
+2026-03-26  st_georges_ri v west_linn        2026-04-10  hillsboro v burns
+                                             2026-04-10  newberg v westview
+```
+
+The 04-10 cluster is a cluster in the DATA, not in the process — all nine were created by
+the same v1→v2 backfill, and 04-10 is simply a date OHSLA still lists fixtures for. See
+`docs/data-quirks.md`.
+
+### Sequence
+
+Identical in shape to stage (b); only the payload differs.
+
+```
+ 1. Fresh full mysqldump of prod, verified restorable        [rollback anchor]
+ 2. Capture prod baseline (scripts/capture-payloads.sh)      [before/]
+ 3. STOP varsitylax-cron                                     ← window opens
+ 4. Apply sections J, K, L to prod
+ 5. Backfills, each --commit, each verified after:
+      backfill-oregon-playoff-type.js   → 38 Oregon playoff games typed
+      markStaleFixtures                 → 9 fixtures marked stale
+      seed-playoff-formats.js           → 6 brackets, 6/6 anchors resolve
+ 6. git push  (auto-deploys varsitylax-api + varsitylax-cron)
+      ⚠️ brief API blip, ~30-60s. Expected, not an incident.
+ 7. Confirm both services boot; check the [db] target=PROD line
+ 8. RESTART varsitylax-cron                                  ← window closes
+ 9. Capture prod again → diff against step 2; compare to the table above
+10. Watch one full cron cycle: scrape_log status=success, AND the 9 stale rows
+    are NOT revived (the resurrection guard in dual-write.js)
+```
+
+Step 10's second clause is not optional. The first version of the stale marking would
+have flipped all nine back to `scheduled` every two hours, because
+`ON DUPLICATE KEY UPDATE status = VALUES(status)` overwrites the mark. The guard exists;
+this is where it is proven on prod.
+
+### Verification after step 5, before step 6
+
+```
+seed-playoff-formats.js  → OR 38/38 and WA 0/0 assigned, 0 orphans, 0 overlaps
+                           (WA is empty on prod until stage (c) — expected)
+SELECT COUNT(*) FROM playoff_formats WHERE season=2026        → 2 (Oregon only)
+SELECT COUNT(*) FROM v_playoff_format_anchors WHERE season=2026 → 2, must equal above
+SELECT COUNT(*) FROM games WHERE season=2026 AND status='stale' → 9
+SELECT COUNT(*) FROM games WHERE season=2026 AND game_type='playoff' → 38
+```
+
+**Oregon seeds 2 brackets, not 6.** `scripts/seed-playoff-formats.js` declares all six;
+the four Washington anchors will not resolve on prod because prod has no WA games. The
+seeder STOPS on an unresolved anchor by design, so it must be run with the WA brackets
+filtered out, or after stage (c). **Decide which before the window** — this is the one
+step that differs materially from its staging rehearsal.
+
+### Rollback
+
+- **Before step 6:** sections J/K/L are additive DDL; drop `playoff_formats`,
+  `stale_exemptions`, `v_stale_watch`, revert the status ENUM, drop `is_forfeit`. Data
+  backfills reverse with `UPDATE ... SET status='scheduled'` / `game_type=NULL` on the
+  affected id sets, which each script prints.
+- **After step 6:** `git revert` the range and redeploy first, then roll the schema back.
+  Old code cannot read the new columns but does not require them.
+- **Anything unclear:** restore the step-1 dump. It is the anchor.
 
 ---
 
