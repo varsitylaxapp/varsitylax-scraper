@@ -22,52 +22,65 @@ folder.
 | File | Consumed by | Notes |
 |---|---|---|
 | `Teams.xlsx` | `scripts/whsbla-extract.py` → `scripts/import-whsbla.js` | Sheet `Teams`, 127 rows. 75 untagged = WHSBLA members; 52 `(XX)`-tagged = out-of-state opponents. `San Marcos SD (CA)` appears twice; the extractor dedupes to 51 and reports it. |
-| `2026-WHSBLA-Varsity-(Lacrosse)-Schedule.xlsx` | same | Sheet `WBLA Schedule`, **531 rows** (532 `<row>` elements incl. header), 2026-03-13 → 2026-05-23. **531 is a SHEET ROW COUNT, not a game count** — see the reconciliation below before comparing it to anything. |
-
-### 531 rows → 508 games → 529 in the WA feed
-
-Reconciled 2026-07-29 because the three numbers get mistaken for each other, and
-the natural guess — "the difference is the scrimmages" — is wrong in both
-directions.
-
-```
-531  rows in the schedule sheet
-  508  inserted             canonical_source = 'whsbla'
-+  22  left to OHSLA        the export also listed these; OHSLA already owned
-                            them, so source precedence kept OHSLA as canonical
-                            (section-f4-source-conflicts.sql). Reported by the
-                            importer as gamesLeftToHigherPrioritySource.
-+   1  rejected out of scope
-= 531                       zero unexplained rows
-
-529  games served by GET /api/v2/schedule/all?state=WA
-  503  whsbla-sourced with at least one WA-curated participant
-+  26  ohsla-sourced  with at least one WA-curated participant
-= 529
-```
-
-The other **5** whsbla-sourced games have **no WA participant** and therefore do
-not appear in WA's feed:
-
-```
-bend_caldera(OR) vs faith_lutheran_nv(NV)   non_league
-lakeridge(OR)    vs palo_verde_nv(NV)       exhibition
-grant(OR)        vs nanaimo_bc(BC)          exhibition
-grant(OR)        vs palo_verde_nv(NV)       exhibition
-summit(OR)       vs claremont_bc(BC)        exhibition
-```
-
-They surface in **Oregon's** feed, which is correct: a state feed is by
-participant, not by which export the row arrived in. Four of them are the
-exhibitions behind the iOS Teams-tab record bug — the app counted them toward W–L
-while `v_team_season_record` did not.
-
-⚠️ **The 2 `practice`-type games are NOT the delta.** They are *inside* the 529
-(`league` 260 · `non_league` 224 · `playoff` 43 · `practice` 2) and they DO render
-on the Scores board — they were played. They are excluded from **records** only,
-by `is_scrimmage` / `game_type`, exactly like exhibitions.
+| `2026-WHSBLA-Varsity-(Lacrosse)-Schedule.xlsx` | same | Sheet `WBLA Schedule`, **531 rows** (532 `<row>` elements incl. header), 2026-03-13 → 2026-05-23. **531 is a SHEET ROW COUNT, not a game count** — see the count ladder below before comparing it to anything. |
 | `Classifications-2027-draft.xlsx` | **not yet imported** — seeds season **2027** | Sheet `Teams`, 76 teams, all classified. Brandon's draft; final version expected **end of October 2026**. |
 | `alias-decisions.json` | `scripts/import-whsbla.js` | Human alias rulings with approver + evidence. |
+
+## Count ladder — 531 sheet rows to 528 feed rows
+
+Six games existed in BOTH sources, mirrored — same date, same pair, opposite home
+side — because `uq_game` and the importer's ownership lookup were both
+orientation-sensitive. They were collapsed to the OHSLA row with the orientation
+disagreement logged to `source_conflicts`. See
+`scripts/dedupe-mirrored-games.js` and `migrations/section-i-*`.
+
+```
+531  rows in the WHSBLA schedule sheet
+  508  inserted           canonical_source = 'whsbla'
++  22  left to OHSLA      source precedence, both sources agreed on orientation
++   1  rejected out of scope
+= 531                     zero unexplained rows
+
+508  inserted
+-   6  deleted as mirrored duplicates (all WHSBLA-side; OHSLA rows kept)
+= 502  whsbla-sourced games remaining
+
+856  total 2026 games  =  354 ohsla  +  502 whsbla
+
+FEED COUNTS
+  Oregon      360 -> 354   all 6 duplicates had an OR participant
+  Washington  529 -> 528   only ONE did (nelson / richland_wa)
+```
+
+⚠️ **There is no "523".** An earlier note claimed 523 distinct WA matchups by
+assuming all six duplicates sat in Washington's feed. Only one did — the other five
+are Oregon teams against Nevada and BC opponents, with no WA participant. The WA feed
+is **528**. The wrong figure was produced by reasoning about the data instead of
+counting it, which is the same mistake the count-binds-to-rendered-rows rule exists
+to prevent, one layer down.
+
+Four records were inflated by the duplicates and are now correct:
+
+```
+nelson             15-4 -> 14-4        richland_wa   18-5 -> 18-4
+bend_caldera        6-7 ->  6-6        faith_lutheran_nv  2-1 -> 1-1
+```
+
+A separate FIELD-level merge followed: WHSBLA had classified four of the six as
+`exhibition` where OHSLA says `non_league`, and the scheduling league is authoritative
+on what kind of game it was. Adopting that (`scripts/adopt-whsbla-game-types.js`)
+restored `exhibition: 4` and re-excluded those games from records, moving six more
+teams — grant 12-8 → 11-7, lakeridge 16-4 → 15-4, summit 9-7 → 9-6,
+palo_verde_nv 3-1 → 2-0, nanaimo_bc 2-2 → 2-1, claremont_bc 2-2 → 1-2.
+
+All of the above is asserted from outside the database by
+`scripts/verify-record-parity.js`, whose oracle is hardcoded from these rulings
+rather than queried — because the earlier parity check compared two consumers of the
+same table and agreed while both double-counted.
+
+⚠️ **The 2 `practice`-type games are NOT the delta.** They are *inside* the WA feed
+and they DO render on the Scores board — they were played. They are excluded from
+**records** only, by `is_scrimmage` / `game_type`, exactly like exhibitions.
 
 ### Schedule sheet — column trap
 

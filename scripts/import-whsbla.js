@@ -36,6 +36,28 @@ const SOURCE = 'whsbla';
 
 // ROSTER-LOCKED STATES (policy 2026-07-28). A state with a curated canonical
 // roster may NEVER have teams auto-created by an importer. Unresolved names go
+// ─────────────────────────────────────────────────────────────────────────────
+// ROW OWNERSHIP AND FIELD AUTHORITY ARE DIFFERENT QUESTIONS.
+//
+// `game_source_priority` answers "whose ROW is this" and nothing more. It does not
+// follow that the owning source is right about every FIELD on it. A cross-source
+// merge must therefore enumerate per-field authority explicitly — who owns the
+// score, who owns the date, who owns the game kind — rather than handing the whole
+// row to one source.
+//
+// WORKED EXAMPLE (2026-07-29). Six games existed in both sources. Row ownership went
+// to OHSLA, correctly: it recorded them first and owns Oregon game records. But
+// WHSBLA had classified four of them `exhibition` and OHSLA calls them `non_league`,
+// and WHSBLA is the league that SCHEDULED those fixtures — so it is authoritative on
+// what kind of game they were, whoever owns the row. A row-level keeper silently
+// discarded that, moving four games back into record math.
+//     Resolution: keep OHSLA's rows and ownership, adopt WHSBLA's game_type, log a
+//     game_type conflict for each. See scripts/adopt-whsbla-game-types.js.
+//
+// THERE IS DELIBERATELY NO FULL AUTHORITY MAP YET. It grows case by case, with a
+// ruling per case, recorded where the case is handled. Inventing one up front would
+// be guessing about disagreements that have not happened.
+// ─────────────────────────────────────────────────────────────────────────────
 // to unresolved_aliases for human review and become alias-decisions.json
 // entries. Placeholder creation stays allowed for non-curated states (the
 // TX/TN/BC/CA opponents nobody maintains a roster for).

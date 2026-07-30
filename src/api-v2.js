@@ -60,7 +60,7 @@ async function latestSnapshot(source, season, state = DEFAULT_STATE) {
 
 const GAME_SELECT = `
   SELECT g.id, g.season, g.game_date AS date, g.game_datetime AS datetime,
-         g.status, g.game_type AS gameType,
+         g.status, g.game_type AS gameType, g.is_forfeit AS isForfeit,
          g.is_conference AS isConference, g.is_overtime AS isOvertime,
          g.home_score AS homeScore, g.away_score AS awayScore,
          ht.slug AS homeSlug, ht.name AS homeName, ht.state AS homeState,
@@ -82,6 +82,10 @@ function gameJson(r) {
     // practices from records; until now it hardcoded isScrimmage:false, so its
     // W-L disagreed with the server's v_team_season_record.
     gameType: r.gameType,
+  // ADDITIVE 2026-07-29 (section J). Appended LAST so Oregon's payload does not
+  // move. A forfeit is a result AWARDED rather than played — indistinguishable from
+  // a normal final without this. 10 games in 2026, all WHSBLA-sourced.
+  isForfeit: !!r.isForfeit,
   };
 }
 
@@ -289,6 +293,7 @@ router.get('/schedule/team/:slug', async (req, res) => {
         result: r.status === 'completed' ? (teamScore > oppScore ? 'W' : teamScore < oppScore ? 'L' : 'T') : null,
         venue: r.venueName ? { name: r.venueName, city: r.venueCity } : null,
         gameType: r.gameType,   // ADDITIVE 2026-07-29 — see gameJson()
+          isForfeit: !!r.isForfeit,  // ADDITIVE 2026-07-29 (section J)
       };
     });
     res.json({ team: { slug: team.slug, name: team.name }, season, games });

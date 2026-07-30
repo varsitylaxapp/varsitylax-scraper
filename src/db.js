@@ -81,7 +81,9 @@ if (target === 'staging') {
   };
 }
 
-console.log(
+// stderr, not stdout: this line is diagnostic, and on stdout it corrupts any
+// script whose output is piped or parsed as JSON (scripts/survey-games.js).
+console.error(
   `[db] target=${target.toUpperCase()} host=${config.host} db=${config.database} user=${config.user}`
 );
 
