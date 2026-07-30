@@ -225,3 +225,43 @@ list of round cards could not; seed numbers may turn out to be noise on it, or m
 out to be exactly what is missing. Spencer's P7 device session is the input. Deciding
 before then would be rebuilding from memory of a screen whose generating logic was
 condemned.
+
+---
+
+## Swift modernization — deferred past 2.0
+
+Two things that want the same effort, deliberately NOT done before TestFlight.
+
+### `@Observable` instead of `ObservableObject` / `@Published`
+
+Six ViewModels. Available since the iOS 17.0 floor (2026-07-30). Less boilerplate and
+finer-grained invalidation — SwiftUI tracks the properties a view actually reads instead
+of republishing the whole object.
+
+**Deferred because it touches every screen and buys a user nothing.** Days before a
+release is the wrong time to change how every view observes its state; the risk is
+entirely on our side of the ledger and the reward is entirely on ours too.
+
+### Swift 6 concurrency warnings
+
+Eight, all the same shape:
+
+```
+main actor-isolated static property 'pacificTimeZone' can not be referenced from a
+nonisolated context; this is an error in the Swift 6 language mode
+```
+
+In `MockData`, `ChampionshipDay`, `Game`, `StatewideGame`, plus `DataService.shared`
+from `PlayoffsViewModel` and `TeamDetailViewModel`. They PREDATE the iOS 17 bump — they
+are about actor isolation, not deployment target — and are warnings today, errors only
+under the Swift 6 language mode.
+
+They belong with the `@Observable` work: both are "modernise the concurrency and
+observation story", both touch the same files, and doing them together means one
+regression pass instead of two.
+
+**Watch for:** the fix is not simply annotating everything `@MainActor`. `DataService`
+already is, and that annotation is what fixed the P5 data race — but formatters and
+time zones on model types are pure values that should be `nonisolated`/`static let`
+rather than actor-bound. Getting that backwards would push work onto the main actor that
+does not belong there.
