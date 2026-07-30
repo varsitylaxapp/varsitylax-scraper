@@ -281,7 +281,11 @@ async function main() {
       R.gamesSkipped.push(g);
       continue;
     }
-    const key = `${SEASON}|${hid}|${aid}|${g.date}`;
+    // ORIENTATION-INDEPENDENT, matching uq_game after section-i. Ordered by
+    // home/away, a game the two leagues disagree about the home side of hashed to a
+    // different key and slipped through.
+    const [pairLo, pairHi] = hid <= aid ? [hid, aid] : [aid, hid];
+    const key = `${SEASON}|${pairLo}|${pairHi}|${g.date}`;
     if (seenKey.has(key)) { R.dupeKeys.push({ key, ...g }); continue; }
     seenKey.set(key, g);
 
@@ -298,11 +302,23 @@ async function main() {
     // arbitrates: we never overwrite a field an owner holds. We log the
     // disagreement and leave the owner's value standing. Provenance is written
     // either way, so the DB never misreports where a value came from.
+    //
+    // THIS LOOKUP WAS THE ROOT CAUSE OF THE SIX MIRRORED DUPLICATES. It matched on
+    // `home_team_id = ? AND away_team_id = ?`, so for a game OHSLA had already
+    // recorded with the opposite home side it found NOTHING, concluded there was no
+    // owner, and fell through to the insert. 22 games where both sources agreed on
+    // orientation deferred correctly; the 6 where they disagreed did not. Matching
+    // on the unordered pair is what makes source precedence actually cover the
+    // cross-source case it exists for.
     const [[existing]] = [await q(
       `SELECT id, canonical_source, game_datetime, is_conference, is_overtime,
-              home_score, away_score, status
-       FROM games WHERE season = ? AND home_team_id = ? AND away_team_id = ? AND game_date = ?`,
-      [SEASON, hid, aid, g.date])];
+              home_team_id, away_team_id, home_score, away_score, status
+       FROM games
+       WHERE season = ?
+         AND LEAST(home_team_id, away_team_id) = ?
+         AND GREATEST(home_team_id, away_team_id) = ?
+         AND game_date = ?`,
+      [SEASON, pairLo, pairHi, g.date])];
     const owner = existing?.canonical_source ?? null;
     const ownerPrio = owner ? (prio.get(owner) ?? 0) : -1;
 
@@ -311,6 +327,11 @@ async function main() {
       // OWNED BY A HIGHER-PRIORITY SOURCE — compare, log, do not touch.
       gameId = existing.id;
       const cmp = [
+        // Orientation is a real discrepancy between two leagues' record books, not
+        // a data-entry slip — surfaced, never adjudicated.
+        ['home_away_orientation',
+          `home_team_id=${existing.home_team_id}`,
+          `home_team_id=${hid}`],
         ['home_score', existing.home_score, g.home_score],
         ['away_score', existing.away_score, g.away_score],
         ['is_overtime', existing.is_overtime, g.is_overtime],
