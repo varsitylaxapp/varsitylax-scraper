@@ -191,6 +191,36 @@ if [ "$WINDOW3" = "1" ]; then
     | grep -E "states:|final #|assigned|seeded|COMMIT|ROLLED" | sed 's/^/     /'
 fi
 
+# ── 6b. GUARD DRY-RUN — the one path rehearsal structurally cannot exercise ──
+#
+# Rehearsal runs at target=REHEARSAL, so every prod-refusal guard in these scripts is
+# skipped by construction. That is exactly how window #3 met an unknown guard live: three
+# importers refused prod outright and the refusal could not have surfaced in any rehearsal
+# that came before it.
+#
+# So: invoke each script the way the WINDOW will invoke it — same flags, against PROD —
+# but WITHOUT --commit, so target resolution and guard behaviour are exercised and nothing
+# is written. A script that would refuse the window refuses here instead.
+if [ "$WINDOW3" = "1" ]; then
+  say "6b. guard dry-run — exact prod invocations, no --commit"
+  GUARD_FAIL=0
+  for inv in "import-whsbla.js --stage-c" \
+             "import-whsbla-2027.js --stage-c" \
+             "adopt-whsbla-game-types.js" \
+             "scrape-state-rankings.js WA --stage-c" \
+             "seed-playoff-formats.js --state=WA"; do
+    # no DB_TARGET => prod, which is what the window uses. No --commit => no writes.
+    out=$(cd "$(dirname "$0")/.." && env -u DB_TARGET -u REHEARSAL_DATABASE_URL \
+            node scripts/$inv 2>&1 | grep -iE "FATAL|only runs against|refus" | head -1)
+    if [ -n "$out" ]; then
+      printf "   BLOCKED  %-42s %s\n" "${inv%% *}" "$out"; GUARD_FAIL=$((GUARD_FAIL+1))
+    else
+      printf "   ok       %-42s accepts the window's invocation\n" "${inv%% *}"
+    fi
+  done
+  [ "$GUARD_FAIL" -eq 0 ] || { echo "   → $GUARD_FAIL script(s) would refuse the window"; SMOKE=1; }
+fi
+
 # ── 7. HEAD's API, booted against this schema ────────────────────────────────
 say "$([ "$WINDOW2" = 1 ] && echo 7 || echo 5). boot HEAD's API against the rehearsal schema"
 export DB_TARGET=rehearsal

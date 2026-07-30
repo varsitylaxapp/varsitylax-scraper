@@ -109,7 +109,21 @@ const R = { // report accumulator
 async function q(sql, params = []) { const [r] = await db.execute(sql, params); return r; }
 
 async function main() {
-  if (db.targetLabel !== 'staging') {
+  // STAGING BY DEFAULT, PROD ONLY WITH --stage-c.
+  //
+  // The guard exists to stop an ACCIDENTAL production import, and that is still worth
+  // stopping — this script writes a whole state's season. What it must not do is make a
+  // DELIBERATE, rehearsed production run impossible, which is what stage (c) / window #3
+  // is. So prod requires naming the operation explicitly; a bare invocation still cannot
+  // reach it, and `rehearsal` (the Docker gate) passes as before.
+  const STAGE_C = process.argv.includes('--stage-c');
+  if (db.targetLabel === 'prod' && !STAGE_C) {
+    console.error(`FATAL: resolved target is "prod". Pass --stage-c to run the ` +
+      `Washington promotion against production deliberately.`);
+    process.exit(1);
+  }
+  if (db.targetLabel !== 'staging' && !(db.targetLabel === 'prod' && STAGE_C)
+      && db.targetLabel !== 'rehearsal') {
     console.error(`FATAL: resolved target is "${db.targetLabel}". This importer only runs against staging.`);
     process.exit(1);
   }

@@ -299,3 +299,50 @@ on the existing monitor, so announce a window before starting.
 
 `/api/v2/playoff-formats?state=WA` is deliberately NOT on the list: it is cheap, cached
 per (state, season) by the client, and only fetched when the Playoffs screen opens.
+
+---
+
+## Unexplained: rehearsal predicted 76 Washington teams, prod produced 77
+
+**Open. Low urgency, nonzero importance — an unexplained rehearsal-vs-prod delta is a
+crack in the safety system, not a rounding error.**
+
+Window #3, 2026-07-30. The rehearsal pinned `/teams?state=WA` at 76 across two runs from
+two fresh prod dumps. Production produced 77.
+
+**The extra row is correct data.** Vashon (`vashon_wa`, id 234) appears in
+`Classifications-2027-draft.xlsx` as `wa_2a`, is absent from the 2026 `Teams.xlsx`, and
+has zero games. `/teams` is season-agnostic, so it lists all 77 — 75 with a 2026 season
+row, 76 with a 2027 row. Nothing about production is wrong.
+
+**What is unexplained is why the rehearsal did not produce it.** Same scripts, same
+order, same dump source, both with `--commit`.
+
+### Where the divergence must live
+
+`scripts/import-whsbla-2027.js:88-98` — the ADMISSIONS path is the only place this script
+creates a `teams` row:
+
+```js
+let id = idx.get(normalizeAlias(a.name)) ?? looseIdx.get(loose(a.name)) ?? null;
+if (!id && COMMIT) { /* INSERT INTO teams ... */ }
+```
+
+So either the rehearsal RESOLVED Vashon against `idx`/`looseIdx` (and prod did not), or
+its admissions list differed. Both indices are built from `teams` + `team_aliases` as they
+stand after step 3a, which should be identical in both environments — so one of those
+"shoulds" is false, and that is the thing to find.
+
+### How to chase it
+
+Re-run `./scripts/rehearse-on-prod-schema.sh --window3` and read step 3b's FULL output.
+It is no longer truncated — `tail -6` used to hide exactly this path, which is why the
+evidence was unavailable when the question first arose. Compare the admission handling
+line for Vashon against production's, which is in this window's transcript.
+
+### Why it matters more than one row
+
+The rehearsal is the gate that lets a production window be trusted. A gate that
+under-predicts by one row of correct data is benign this time; the same fidelity gap
+could as easily hide a row that is not benign. The delta stays on the ledger until it has
+a name.

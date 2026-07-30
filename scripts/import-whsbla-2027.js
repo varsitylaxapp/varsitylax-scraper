@@ -40,7 +40,21 @@ const loose = s => String(s || '').toLowerCase().trim()
 async function q(sql, p = []) { const [r] = await db.execute(sql, p); return r; }
 
 (async () => {
-  if (db.targetLabel !== 'staging') {
+  // STAGING BY DEFAULT, PROD ONLY WITH --stage-c.
+  //
+  // The guard exists to stop an ACCIDENTAL production import, and that is still worth
+  // stopping — this script writes a whole state's season. What it must not do is make a
+  // DELIBERATE, rehearsed production run impossible, which is what stage (c) / window #3
+  // is. So prod requires naming the operation explicitly; a bare invocation still cannot
+  // reach it, and `rehearsal` (the Docker gate) passes as before.
+  const STAGE_C = process.argv.includes('--stage-c');
+  if (db.targetLabel === 'prod' && !STAGE_C) {
+    console.error(`FATAL: resolved target is "prod". Pass --stage-c to run the ` +
+      `Washington promotion against production deliberately.`);
+    process.exit(1);
+  }
+  if (db.targetLabel !== 'staging' && !(db.targetLabel === 'prod' && STAGE_C)
+      && db.targetLabel !== 'rehearsal') {
     console.error(`FATAL: target is "${db.targetLabel}". Staging only.`); process.exit(1);
   }
   console.log(`\n=== import-whsbla-2027 (draft) ===`);
