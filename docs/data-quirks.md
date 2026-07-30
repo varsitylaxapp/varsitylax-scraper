@@ -38,3 +38,54 @@ collation (see `EQ()` in `db/migrate/section-d-backfill.js`). This applies to
 migration scripts only — app/API queries touch one side only. The issue retires
 itself when the legacy tables are dropped at E5.5. Do not ALTER either side's
 collation to "fix" this.
+
+---
+
+## OHSLA never retires a fixture — assume additive-only sources
+
+**Established 2026-07-29.** A fact about the world, worth more than the fix it prompted.
+
+When a game MOVES, ohsla.net adds a row for the new date and **leaves the old one
+standing**. When a game is CANCELLED, the row **stands forever**. The feed only ever
+grows.
+
+Evidence: nine 2026 fixtures were still `scheduled` and unscored months after the
+season ended — and all nine carried `source_updated_at = 2026-07-27 21:02–21:03`,
+which *is* the most recent successful `ohsla-v2` scrape. That run touched all 354
+games. The source is not forgetting these rows; it is actively re-asserting them.
+
+Worked example, the clearest of the nine:
+
+```
+v1 row   marist vs Newberg   2026-05-26 7:00pm   unscored   scraped 2026-05-23
+reality  marist vs newberg   2026-05-27 7:00pm   10-11      played
+```
+
+Same 7:00pm fixture, moved one day, and OHSLA published both.
+
+### Why this defeats pruning
+
+`src/dual-write.js`'s prune asks: *does this pair+date still appear in the current
+feed?* For an additive-only source the answer is permanently yes. The prune is not
+missing a rule — **it never gets the chance**. Any design that infers deletion from a
+source's silence will fail here, because this source is never silent.
+
+I initially read the nine rows' clustering on 2026-04-10 as one scrape's batch
+surviving unreconciled — a process failure. It is not: all nine were created in the
+same v1→v2 backfill, and 04-10 is simply a date OHSLA still lists five fixtures for.
+A cluster in the DATA is not a cluster in the PROCESS.
+
+### The rule that does work
+
+Staleness must be decided by US, from elapsed time, not inferred from the feed. See
+`src/stale-fixtures.js` and `migrations/section-k-stale-fixtures.sql`: no scores +
+still `scheduled` + more than 14 days past → `status = 'stale'`. Marked, not deleted,
+so a re-assertion lands harmlessly on the marked row and a late score revives it.
+`practice` is exempt; a listed, never-scored practice is a true fact.
+
+### Assume the same of WHSBLA until proven otherwise
+
+There is no evidence Sportability behaves better, and the rule applies to both
+sources for that reason. `v_stale_watch` surfaces fixtures ageing past 7 days — before
+the 14-day mark hides them — because a played-but-unscored game is data-entry lag we
+want to see, not bury.

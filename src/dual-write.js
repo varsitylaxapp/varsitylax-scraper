@@ -120,7 +120,16 @@ async function writeGames(scrapedGames, source = 'ohsla') {
            game_datetime = VALUES(game_datetime),
            venue_id = VALUES(venue_id), is_conference = VALUES(is_conference),
            is_overtime = VALUES(is_overtime), home_score = VALUES(home_score),
-           away_score = VALUES(away_score), status = VALUES(status),
+           away_score = VALUES(away_score),
+           -- STALE IS STICKY UNLESS A SCORE ARRIVES. A plain status = VALUES(status)
+           -- resurrected every aged-out fixture on the next scrape: OHSLA still
+           -- lists them unscored, so the incoming status was 'scheduled' and it
+           -- overwrote 'stale'. Now only a COMPLETED row -- one carrying scores --
+           -- can revive a stale fixture, which is the auto-revival we want for a
+           -- late score without the resurrection we do not.
+           -- (No backticks in this comment: it sits inside a JS template literal.)
+           status = IF(VALUES(status) = 'completed', 'completed',
+                       IF(games.status = 'stale', 'stale', VALUES(status))),
            canonical_source = VALUES(canonical_source), source_updated_at = NOW(),
            id = LAST_INSERT_ID(id)`,
         [m.season, m.homeId, m.awayId, m.date, m.datetime, m.venueId,
@@ -201,6 +210,22 @@ async function writeGames(scrapedGames, source = 'ohsla') {
       console.log(`[dual-write] pruned ${pruned} stale scheduled game(s): ` +
         stale.map(s => `#${s.id} ${s.d}`).join(', '));
     }
+  }
+
+  // AGE OUT unscored fixtures the source will never retire. Runs every cycle, for
+  // every source, because OHSLA re-confirms months-dead fixtures on every scrape and
+  // there is no reason to trust WHSBLA's export to behave better. See
+  // src/stale-fixtures.js and docs/data-quirks.md.
+  try {
+    const { markStaleFixtures } = require('./stale-fixtures');
+    const { marked, rows } = await markStaleFixtures(db, SEASON);
+    if (marked) {
+      console.log(`[dual-write] marked ${marked} fixture(s) stale: ` +
+        rows.map(r => `#${r.id} ${r.d}`).join(', '));
+    }
+  } catch (err) {
+    // Never fail a scrape over hygiene — but say so loudly.
+    console.error('[dual-write] stale marking failed:', err.message);
   }
 
   await refreshWinLoss(SEASON);

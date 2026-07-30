@@ -245,7 +245,8 @@ router.get('/schedule/all', async (req, res) => {
     // states' feeds. Defaulting to OR keeps the shipped iOS app byte-identical
     // — it must never receive another state's games until it asks.
     const [rows] = await db.execute(
-      `${GAME_SELECT} WHERE g.season = ? AND (ht.state = ? OR at2.state = ?)
+      `${GAME_SELECT} WHERE g.season = ? AND g.status <> 'stale'
+           AND (ht.state = ? OR at2.state = ?)
        ORDER BY g.game_date, g.id`, [season, state, state]);
     res.json({ season, games: rows.map(gameJson) });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -260,12 +261,41 @@ router.get('/schedule/playoffs', async (req, res) => {
   if (!state) return res.status(400).json({ error: `unknown state '${req.query.state}'` });
   const start = process.env.PLAYOFFS_START || `${season}-05-14`;
   try {
-    const [rows] = await db.execute(
-      `${GAME_SELECT} WHERE g.season = ? AND g.game_date >= ?
-         AND (ht.state = ? OR at2.state = ?)
-       ORDER BY g.game_date, g.id`,
-      [season, start, state, state]);
-    res.json({ season, playoffsStart: start, games: rows.map(gameJson) });
+    // `game_type` IS THE SIGNAL. The date window survives only as a fallback for a
+    // (season, state) whose rows were never typed — which is how this endpoint worked
+    // for everyone, and it was wrong in BOTH directions: Oregon had no typed rows at
+    // all, while Washington has 43 typed playoff games of which 19 fall BEFORE
+    // 2026-05-14 and were silently dropped.
+    const [[typed]] = await db.execute(
+      `SELECT COUNT(*) n FROM games g
+         JOIN teams ht ON ht.id = g.home_team_id
+         JOIN teams at2 ON at2.id = g.away_team_id
+        WHERE g.season = ? AND g.game_type = 'playoff'
+          AND (ht.state = ? OR at2.state = ?)`, [season, state, state]);
+    const useColumn = typed.n > 0;
+
+    const [rows] = useColumn
+      ? await db.execute(
+          `${GAME_SELECT} WHERE g.season = ? AND g.game_type = 'playoff'
+             AND g.status <> 'stale'
+             AND (ht.state = ? OR at2.state = ?)
+           ORDER BY g.game_date, g.id`,
+          [season, state, state])
+      : await db.execute(
+          `${GAME_SELECT} WHERE g.season = ? AND g.game_date >= ?
+             AND g.status <> 'stale'
+             AND (ht.state = ? OR at2.state = ?)
+           ORDER BY g.game_date, g.id`,
+          [season, start, state, state]);
+
+    res.json({
+      season,
+      // Reported so a consumer can tell WHICH definition produced this list rather
+      // than inferring it from the shape of the data.
+      playoffSource: useColumn ? 'game_type' : 'date_window',
+      playoffsStart: useColumn ? null : start,
+      games: rows.map(gameJson),
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -278,7 +308,8 @@ router.get('/schedule/team/:slug', async (req, res) => {
     const [[team]] = await db.execute(`SELECT id, slug, name FROM teams WHERE slug = ?`, [slug]);
     if (!team) return res.status(404).json({ error: `unknown team slug '${slug}'` });
     const [rows] = await db.execute(
-      `${GAME_SELECT} WHERE g.season = ? AND (g.home_team_id = ? OR g.away_team_id = ?)
+      `${GAME_SELECT} WHERE g.season = ? AND g.status <> 'stale'
+         AND (g.home_team_id = ? OR g.away_team_id = ?)
        ORDER BY g.game_date, g.id`, [season, team.id, team.id]);
     const games = rows.map(r => {
       const isHome = r.homeSlug === slug;
