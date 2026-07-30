@@ -252,6 +252,56 @@ router.get('/schedule/all', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ── GET /api/v2/playoff-formats ──────────────────────────────────────────────
+// Bracket STRUCTURE for a (state, season): named brackets, field size, play-in
+// column, and the final's resolved game id.
+//
+// A SEPARATE ENDPOINT, deliberately not folded into /states. /states is
+// season-less and loaded at launch; formats are (state, division, season)-scoped and
+// only wanted when the Playoffs tab renders. Folding them in would bolt
+// season-varying data onto a season-invariant payload and ship bracket structure on
+// every cold launch, including the sessions that never open Playoffs. The client
+// fetches this lazily and caches per (state, season), like the roster.
+//
+// Reads v_playoff_format_anchors, which INNER JOINs the final. A format whose anchor
+// does not resolve is therefore absent rather than present-with-null — so a count
+// mismatch against playoff_formats is the alarm for a rescheduled final, and no
+// consumer ever receives a bracket it cannot anchor.
+router.get('/playoff-formats', async (req, res) => {
+  const season = parseInt(req.query.season || SEASON());
+  const state = reqState(req);
+  if (!state) return res.status(400).json({ error: `unknown state '${req.query.state}'` });
+  try {
+    const [rows] = await db.execute(
+      `SELECT bracket_key, display_name, division_id, field_size, play_in_games,
+              final_game_id, DATE_FORMAT(final_game_date, '%Y-%m-%d') AS final_date,
+              sort_order
+         FROM v_playoff_format_anchors
+        WHERE season = ? AND state = ?
+        ORDER BY sort_order, bracket_key`, [season, state]);
+    const [[declared]] = await db.execute(
+      `SELECT COUNT(*) n FROM playoff_formats WHERE season = ? AND state = ?`, [season, state]);
+    res.json({
+      season,
+      state,
+      // Surfaced rather than hidden: if these disagree, a final moved and a human
+      // needs to look. The client renders the brackets it got and does not invent
+      // the missing one.
+      declared: declared.n,
+      resolved: rows.length,
+      brackets: rows.map(r => ({
+        key: r.bracket_key,
+        displayName: r.display_name,
+        divisionId: r.division_id,
+        fieldSize: r.field_size,
+        playInGames: r.play_in_games,
+        finalGameId: r.final_game_id,
+        finalDate: r.final_date,
+      })),
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ── GET /api/v2/schedule/playoffs ────────────────────────────────────────────
 // Playoff window start is config-driven (season-agnostic goal); falls back to
 // the 2026 value the v1 endpoint hardcodes.
