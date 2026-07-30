@@ -265,3 +265,37 @@ already is, and that annotation is what fixed the P5 data race — but formatter
 time zones on model types are pure values that should be `nonisolated`/`static let`
 rather than actor-bound. Getting that backwards would push work onto the main actor that
 does not belong there.
+
+---
+
+## Pre-warm coverage for Washington — Spencer's UptimeRobot dashboard
+
+**Due with window #3.** Per-state launch gate: the pre-warm mechanism currently covers
+Oregon only, so Washington's first request of the day pays the cold-start cost that
+Oregon stopped paying at v1.6.0.
+
+Today one monitor pings `/api/rankings/laxnumbers` every 5 minutes. That is a **v1,
+Oregon-only** endpoint — it warms the container and the connection pool, which helps
+every state, but it exercises none of the v2 Washington paths.
+
+### What Spencer needs to add
+
+Same 5-minute interval, same alert settings as the existing monitor:
+
+| # | URL | why this one |
+|---|---|---|
+| 1 | `https://api.varsitylaxapp.com/api/v2/rankings/laxnumbers?season=2026&state=WA` | the WA rankings snapshot query — different snapshot row, different index path from Oregon's |
+| 2 | `https://api.varsitylaxapp.com/api/v2/schedule/playoffs?season=2026&state=WA` | the heaviest WA query: 43 games plus the playoff-graph walk over four brackets |
+
+**Two, not six.** These are the two that touch WA-specific query paths; `/teams` and
+`/schedule/all` warm the same connection pool the existing monitor already keeps hot, and
+more monitors on a free plan buys noise rather than coverage.
+
+### Watch for
+
+The alert threshold on the free plan is **unverified** — recorded as a decision in
+window #1 and still not checked. A deploy blip will page on these two exactly as it does
+on the existing monitor, so announce a window before starting.
+
+`/api/v2/playoff-formats?state=WA` is deliberately NOT on the list: it is cheap, cached
+per (state, season) by the client, and only fetched when the Playoffs screen opens.

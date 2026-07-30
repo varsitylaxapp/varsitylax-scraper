@@ -670,6 +670,122 @@ step that differs materially from its staging rehearsal.
 
 ---
 
+## Window #3 — stage (c): Washington goes live
+
+**Status: REHEARSED 2026-07-30, gate green. Awaiting Spencer's window. Nothing applied.**
+
+The release the 2.0 notes are written for. Until this runs, `/states` advertises
+Washington as fully capable while serving 16 teams of 76, no rankings, no brackets and
+**zero real Washington games** — a user who switches states sees Oregon's cross-border
+fixtures presented as Washington's season.
+
+### What ships
+
+| # | step | script |
+|---|---|---|
+| 1 | roster, aliases, 2026 classifications, the 502-game season | `import-whsbla.js --commit` |
+| 2 | 2027 classifications | `import-whsbla-2027.js --commit` |
+| 3 | `game_type` adoption (exhibition / practice from the export) | `adopt-whsbla-game-types.js --commit` |
+| 4 | WA rankings, one-off backfill | `scrape-state-rankings.js WA --commit` |
+| 5 | WA playoff formats — **the stage-(c) seeder invocation, by name** | `seed-playoff-formats.js --state=WA --commit` |
+| 6 | `enabled: true` for WA in the registry | code, ships with the push |
+
+**Step 6 is smaller than it looks and worth stating exactly.** `enabled` gates the
+SCRAPER, and its only consumer is `enabledStates('hasRankings')` in `cron.js` and
+`index.js` — so it turns on **WA rankings scraping and nothing else**. Washington's games
+are export-based and no code path tries to scrape them. Without it the backfill would be
+a one-off and WA rankings would freeze at whatever step 4 captured, which is the
+silently-stale failure this project keeps finding rather than a missing feature.
+
+**Step 5 is the invocation the seeder's `--state` filter was built for.** The seeder
+declares all six brackets and STOPS on an anchor that will not resolve; before this
+window WA's four cannot resolve, because prod has no WA games.
+
+### ✅ Rehearsal — 2026-07-30, `--window3`, gate PASSED
+
+Fresh prod dump → `mysql:8.0.41` at prod's `NO_ENGINE_SUBSTITUTION` → full sequence →
+HEAD's API booted against it → 24/24 endpoints healthy.
+
+### Written expected diff — PINNED BY REHEARSAL, not computed
+
+Every number below was produced by the rehearsal run and then asserted by a second run.
+None of them is arithmetic.
+
+| endpoint | before | after |
+|---|---|---|
+| `/teams?state=WA` (2026) | 16 | **76** |
+| `/teams?state=WA` (2027) | 16 | **76** |
+| `/schedule/all?state=WA` | 24 | **526** |
+| `/schedule/playoffs?state=WA` | 0 | **43** |
+| `/rankings/laxnumbers?state=WA` | **404** | **75** |
+| `/playoff-formats?state=WA` | 0 declared / 0 resolved | **4 / 4** |
+| `/schedule/team/mount_si_wa` | 1 | **23** |
+
+**526, not 502.** The 502 is Washington-vs-Washington; the feed also carries the 24
+cross-border games, which belong to both states by design.
+
+#### ⚠️ OREGON DOES NOT MOVE — and that is the finding, not an assumption
+
+| Oregon endpoint | before | after |
+|---|---|---|
+| `/schedule/all` | 345 | **345** |
+| `/schedule/playoffs` | 38 | **38** |
+| `/playoff-formats` | 2 / 2 | **2 / 2** |
+| `/rankings/laxnumbers` | 41 | **41** |
+
+The brief anticipated Oregon's feed changing by the policy-accepted cross-border rows.
+**It does not change at all**, and the reason is that those 24 games were ALREADY in
+Oregon's feed as OHSLA rows — the WHSBLA import matched them rather than duplicating
+them, because the importer's ownership lookup and dedup key are orientation-independent.
+
+That is the mirrored-duplicate fix from P5 paying off silently. Had it not been made,
+this window would have added 24 duplicate Oregon games and nobody would have predicted
+it from the plan. **Stage (c) is Oregon-invisible.**
+
+### prod-smoke covers Washington now, and is proven failable
+
+`scripts/prod-smoke.sh` gained six WA-parameterized checks — and, more importantly,
+**minimum element counts**, because five of the six first passed against a database with
+no Washington data in it. A check asserting only that a key EXISTS treats `{"games": []}`
+as healthy. Against pre-import prod the suite now reports **6 of 24 failing**, naming the
+empty ones; after the window it reports 24/24.
+
+Until the window lands, run it as `SMOKE_SKIP=state=WA ./scripts/prod-smoke.sh`.
+
+### Sequence
+
+```
+ 1. Fresh full mysqldump of prod, verified restorable        [rollback anchor]
+ 2. Capture prod baseline (scripts/capture-payloads.sh)      [before/]
+ 3. Steps 1-5 above, each --commit, each verified after
+ 4. git push  (deploys the registry change; brief API blip, expected)
+ 5. ./scripts/prod-smoke.sh — 24/24, WA checks included, no SMOKE_SKIP
+ 6. Expected-diff table above, against live prod
+ 7. Watch one full cron cycle: scrape_log must now show a WA rankings row alongside
+    Oregon's, and the nine stale rows must still be stale
+```
+
+Step 7's WA row is the proof that step 6 of "what ships" actually took — a rankings
+backfill that the cron does not carry is indistinguishable from one it does, until the
+data goes stale weeks later.
+
+### Rollback
+
+Data-only, and reversible by state: `DELETE` the WA rows added by steps 1-5 (each script
+prints its id set), revert `enabled` to false, redeploy. The schema is untouched — window
+#2 already carried every migration this window needs. **Anything unclear: restore the
+step-1 dump.**
+
+### Deliberately NOT in this window
+
+**The `mountain_view_wa` display rename.** It stays sequenced to the App Store release
+being LIVE, per its standing rule — approved and released, not merely submitted, so no
+production user ever sees a bare "Mountain View" ambiguous with Oregon's. TestFlight
+testers will see "(WA)" alongside the out-of-state tag for the intervening week; that is
+cosmetic, known, and accepted rather than discovered.
+
+---
+
 ## Stage (c) — Washington data, decided separately
 
 **The schema can ship long before Washington content does.** Stage (b) is a

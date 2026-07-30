@@ -18,6 +18,7 @@
 #
 #   ./scripts/rehearse-on-prod-schema.sh                 # baseline: prod schema as-is
 #   ./scripts/rehearse-on-prod-schema.sh --window2       # + window #2's migrations
+#   ./scripts/rehearse-on-prod-schema.sh --window3       # + stage (c): Washington
 #
 # A FRESH DUMP EVERY RUN. A cached dump answers "did HEAD work against prod as it was
 # whenever someone last looked", which is the question that produced the outage.
@@ -29,7 +30,15 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 WINDOW2=0
+WINDOW3=0
 [[ " $* " == *" --window2 "* ]] && WINDOW2=1
+[[ " $* " == *" --window3 "* ]] && WINDOW3=1
+
+# Window-3 expectations. Left blank on the FIRST rehearsal so the run PINS them; set
+# from that run's output thereafter, so later runs assert rather than observe.
+W3_TEAMS="${W3_TEAMS:-}"     ; W3_TEAMS27="${W3_TEAMS27:-}"
+W3_GAMES="${W3_GAMES:-}"     ; W3_PO="${W3_PO:-}"
+W3_RANK="${W3_RANK:-}"       ; W3_OR="${W3_OR:-}"
 
 MYSQL_VERSION="8.0.41"            # prod's exact version — not "8.0", not "latest"
 PROD_SQL_MODE="NO_ENGINE_SUBSTITUTION"   # prod (DreamHost). NOT Railway's STRICT default.
@@ -156,6 +165,32 @@ if [ "$WINDOW2" = "1" ]; then
   node scripts/seed-playoff-formats.js --state=OR --commit 2>&1 | grep -E "states:|assigned|seeded|COMMIT" | sed 's/^/   /'
 fi
 
+if [ "$WINDOW3" = "1" ]; then
+  export DB_TARGET=rehearsal
+  export REHEARSAL_DATABASE_URL="mysql://root:$ROOTPW@127.0.0.1:$PORT/$DBN"
+
+  say "5. stage (c) — Washington promotion"
+  echo "   pre-state (prod, WA):"
+  mysh -N -e "SELECT CONCAT('     teams=', (SELECT COUNT(*) FROM $DBN.teams WHERE state='WA'),
+    '  games=', (SELECT COUNT(*) FROM $DBN.games g JOIN teams h ON h.id=g.home_team_id
+                  JOIN teams a ON a.id=g.away_team_id
+                 WHERE g.season=2026 AND h.state='WA' AND a.state='WA'),
+    '  formats=', (SELECT COUNT(*) FROM $DBN.playoff_formats WHERE state='WA'),
+    '  rankings=', (SELECT COUNT(*) FROM $DBN.rankings_snapshots WHERE state='WA'))"
+
+  echo "   a. roster + aliases + 2026 classifications + the 502-game season"
+  node scripts/import-whsbla.js --commit 2>&1 | tail -14 | sed 's/^/     /'
+  echo "   b. 2027 classifications"
+  node scripts/import-whsbla-2027.js --commit 2>&1 | tail -6 | sed 's/^/     /'
+  echo "   c. game_type adoption (exhibition/practice from the export)"
+  node scripts/adopt-whsbla-game-types.js --commit 2>&1 | tail -6 | sed 's/^/     /'
+  echo "   d. WA rankings one-off backfill"
+  node scripts/scrape-state-rankings.js WA --commit 2>&1 | tail -6 | sed 's/^/     /'
+  echo "   e. WA playoff formats — the stage-(c) seeder invocation, by name"
+  node scripts/seed-playoff-formats.js --state=WA --commit 2>&1 \
+    | grep -E "states:|final #|assigned|seeded|COMMIT|ROLLED" | sed 's/^/     /'
+fi
+
 # ── 7. HEAD's API, booted against this schema ────────────────────────────────
 say "$([ "$WINDOW2" = 1 ] && echo 7 || echo 5). boot HEAD's API against the rehearsal schema"
 export DB_TARGET=rehearsal
@@ -192,6 +227,28 @@ if [ "$WINDOW2" = "1" ]; then
   chk "playoffSource is game_type now"     "$(j '/api/v2/schedule/playoffs?season=2026' 'print(d["playoffSource"])')" "game_type"
   chk "both Oregon finals, one day"        "$(j '/api/v2/schedule/playoffs?season=2026' 'print(len({g["dateKey"] for g in d["games"] if g.get("round")==0}))')" "1"
   [ "$EXPECT_FAIL" -eq 0 ] || SMOKE=1
+fi
+
+if [ "$WINDOW3" = "1" ]; then
+  say "9. stage (c) expected diff — pinned by REHEARSAL, not by arithmetic"
+  W3_FAIL=0
+  c3() { if [ "$2" = "$3" ]; then printf "   ok    %-44s %s\n" "$1" "$2"
+         else printf "   FAIL  %-44s %s (expected %s)\n" "$1" "$2" "$3"; W3_FAIL=$((W3_FAIL+1)); fi; }
+  j3() { curl -s --max-time 25 "http://localhost:3000$1" | python3 -c "import json,sys;d=json.load(sys.stdin);$2"; }
+
+  echo "   WASHINGTON — empty/404 before, populated after:"
+  c3 "teams 2026"        "$(j3 '/api/v2/teams?season=2026&state=WA' 'print(len(d["teams"]))')" "$W3_TEAMS"
+  c3 "teams 2027"        "$(j3 '/api/v2/teams?season=2027&state=WA' 'print(len(d["teams"]))')" "$W3_TEAMS27"
+  c3 "schedule/all"      "$(j3 '/api/v2/schedule/all?season=2026&state=WA' 'print(len(d["games"]))')" "$W3_GAMES"
+  c3 "schedule/playoffs" "$(j3 '/api/v2/schedule/playoffs?season=2026&state=WA' 'print(len(d["games"]))')" "$W3_PO"
+  c3 "rankings"          "$(j3 '/api/v2/rankings/laxnumbers?season=2026&state=WA' 'print(len(d["rankings"]))')" "$W3_RANK"
+  c3 "playoff-formats"   "$(j3 '/api/v2/playoff-formats?season=2026&state=WA' 'print(str(d["declared"])+"/"+str(d["resolved"]))')" "4/4"
+  echo "   OREGON — changes only by the policy-accepted cross-border rows:"
+  c3 "schedule/all OR"   "$(j3 '/api/v2/schedule/all?season=2026' 'print(len(d["games"]))')" "$W3_OR"
+  c3 "playoffs OR"       "$(j3 '/api/v2/schedule/playoffs?season=2026' 'print(len(d["games"]))')" "38"
+  c3 "formats OR"        "$(j3 '/api/v2/playoff-formats?season=2026' 'print(str(d["declared"])+"/"+str(d["resolved"]))')" "2/2"
+  c3 "rankings OR"       "$(j3 '/api/v2/rankings/laxnumbers?season=2026' 'print(len(d["rankings"]))')" "41"
+  [ "$W3_FAIL" -eq 0 ] || SMOKE=1
 fi
 
 say "teardown"

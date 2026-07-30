@@ -66,11 +66,20 @@ const STATES = {
   WA: {
     code: 'WA',
     name: 'Washington',
-    // enabled gates the SCRAPER ONLY (enabledStates() -> index.js / cron.js).
-    // Washington ingestion is export-based, not scraped, so this stays false;
-    // it does not mean the state is hidden from the app. /api/v2/states lists
-    // every registered state regardless.
-    enabled: false,
+    // enabled gates the SCRAPER ONLY, and its single consumer is
+    // enabledStates('hasRankings') in cron.js and index.js — so this flag turns on
+    // WA RANKINGS SCRAPING and nothing else. Washington's GAMES are export-based
+    // (the WHSBLA xlsx), not scraped, and no code path tries to scrape them.
+    //
+    // true since stage (c) / window #3: the one-off backfill seeds the first WA
+    // snapshot, and from then on the 2-hourly cron keeps it current the same way it
+    // does Oregon's. Leaving it false would have frozen WA rankings at whatever the
+    // backfill captured, which is the "silently stale" failure this project keeps
+    // finding rather than a missing feature.
+    //
+    // It never meant the state was hidden: /api/v2/states lists every registered
+    // state regardless.
+    enabled: true,
     slugSuffix: '_wa',
     timeZone: 'America/Los_Angeles',
     laxnumbersId: 3580,
