@@ -340,12 +340,27 @@ that can be deployed independently, and every guard we had watched one half.
    HTTP responses, so it has zero false positives by construction, and it would have
    caught this within seconds of the deploy rather than a day later. Proven able to fail
    (16/16 FAIL against a dead host).
-2. **Pre-push schema rehearsal — HEAD's API booted against a restored prod dump.** The
-   stronger gate, and the one this postmortem really demands: not staging, prod's own
-   schema. It catches what a smoke test can only catch *after* deploying.
-   **BLOCKED: requires a MySQL server.** This machine has `mysql-client` only — no
-   `mysqld`, no Docker. Installing one is a prerequisite for this gate AND for window
-   #2's `mysql:8.0.41` rehearsal, which is blocked for the same reason.
+2. **`./scripts/rehearse-on-prod-schema.sh` — pre-push, mandatory at every phase exit.**
+   The gate this postmortem really demands: HEAD's API booted against a **fresh prod
+   dump** restored into `mysql:8.0.41` at prod's exact `sql_mode`, then smoke-tested.
+   Not staging — prod's own schema. Fresh dump every run, because a cached one answers
+   "did HEAD work against prod as it was whenever someone last looked", which is the
+   question that produced this outage.
+
+   Runs entirely locally via Docker (colima), no cloud resources and no cost.
+   `--window2` additionally applies this window's migrations, so the runbook's written
+   expected diff is *executed* rather than believed.
+
+   **Proven able to fail.** Against the unmigrated prod schema it reports 2/18 endpoints
+   failing (`v_playoff_format_anchors` missing) and refuses. Against the migrated schema
+   it passes 18/18.
+
+   That failure mode was itself found by running the gate: the FIRST version passed
+   against a schema HEAD cannot serve, because `/api/v2/playoff-formats` — the only
+   endpoint that hard-fails on a missing `playoff_formats` — was absent from the smoke
+   list, and `/schedule/playoffs` degrades silently by design (`attachGraph` catches its
+   own errors). A gate's coverage needs the same "prove it can fail" discipline as the
+   code it guards.
 3. **A static SQL/schema conformance checker was attempted and abandoned.** Parsing SQL
    out of `src/` and checking columns against `information_schema` reached 4 false
    positives against a healthy database after two rounds of tightening — it matched
@@ -406,6 +421,42 @@ Items 4–6 are **idempotent and dry-run by default**; each has been exercised o
 Item 7 is the two contract warts (`docs/api-contract.md` §1.3, §1.4) approved as additive
 fixes. They must be written, payload-diffed and baseline-reset **before** the window, not
 during it — a window is for executing a rehearsed plan, not authoring code.
+
+### ✅ Rehearsal result — 2026-07-30
+
+`./scripts/rehearse-on-prod-schema.sh --window2`, against a dump taken that day.
+
+```
+mysql:8.0.41                     SELECT VERSION() → 8.0.41  (verified BEFORE restore)
+sql_mode                         NO_ENGINE_SUBSTITUTION     (set, then verified)
+prod dump                        516K, 18 tables, 1 view, DEFINER stripped, RESTORED
+                                 → closes the "restorability not verified" gap
+J statements 2-5                 ran clean; 0 rows affected — the no-op claim EXECUTED
+K (status ENUM at non-strict)    applied clean — the spot the mode was expected to bite
+L (playoff_formats + view)       applied clean
+backfill-oregon-playoff-type     38 OR games typed; 0 non-completed rows typed
+markStaleFixtures                9 marked
+seed-playoff-formats --state=OR  2 brackets, OR 38/38 assigned, 0 orphans, 0 overlaps
+HEAD API on that schema          booted, [db] target=REHEARSAL
+prod-smoke.sh                    18/18 endpoints healthy
+teardown                         container removed, dump deleted
+```
+
+**Every line of the written expected diff reproduced**, asserted by the script rather
+than read off a log:
+
+| assertion | result |
+|---|---|
+| Oregon `schedule/all` 354 → 345 | 345 ✓ |
+| `/playoff-formats` is a new endpoint | 2 brackets ✓ |
+| `schedule/playoffs` gains `bracketKey` | 38/38 ✓ |
+| `schedule/playoffs` gains `round` | 38/38 ✓ |
+| `schedule/playoffs` gains `advancesTo` | 36 (2 finals correctly null) ✓ |
+| `isForfeit` present | 345/345 ✓ |
+| `dateKey` present | 345/345 ✓ |
+| `rankPosition` present | 41/41 ✓ |
+| `playoffSource` becomes `game_type` | ✓ |
+| both Oregon finals share one day | ✓ |
 
 ### Requirements carried from window #1
 

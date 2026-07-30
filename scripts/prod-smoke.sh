@@ -47,16 +47,33 @@ CHECKS=(
   "/api/v2/schedule/playoffs?season=$SEASON|200|games"
   "/api/v2/schedule/team/oes?season=$SEASON|200|games"
   "/api/v2/schedule/team/nope?season=$SEASON|404|error"
+  # /playoff-formats is the ONLY endpoint that hard-fails on a missing playoff_formats
+  # table. /schedule/playoffs does NOT: attachGraph catches its own errors by design, so
+  # a missing table degrades it silently to a flat list. Without this line the rehearsal
+  # gate passed against a schema HEAD genuinely cannot serve — the gap that proved the
+  # smoke list itself needs the same "prove it can fail" discipline as everything else.
+  "/api/v2/playoff-formats?season=$SEASON|200|brackets"
+  "/api/v2/playoff-formats?season=$SEASON&state=AZ|200|season"
   "/api/rankings/laxnumbers?season=$SEASON|200|rankings"
   "/api/schedule/all?season=$SEASON|200|games"
   "/api/schedule/playoffs|200|games"
 )
 
+# SMOKE_SKIP is a substring filter for endpoints a given deployment legitimately lacks.
+# Live prod runs P5 code today, which predates /playoff-formats entirely and 404s it:
+#   SMOKE_SKIP=playoff-formats ./scripts/prod-smoke.sh
+# After window #2 ships, drop the variable — the route is part of the contract then.
+SKIP="${SMOKE_SKIP:-}"
+
 echo "  host: $HOST"
+[ -n "$SKIP" ] && echo "  skipping endpoints matching: $SKIP"
 echo
 fail=0
 for c in "${CHECKS[@]}"; do
   IFS='|' read -r path want key <<< "$c"
+  if [ -n "$SKIP" ] && [[ "$path" == *"$SKIP"* ]]; then
+    printf "  skip  %-52s (SMOKE_SKIP)\n" "$path"; continue
+  fi
   body=$(curl -s --max-time 25 "$HOST$path")
   code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 25 "$HOST$path")
   detail=$(printf '%s' "$body" | python3 -c "

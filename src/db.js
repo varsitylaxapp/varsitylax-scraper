@@ -19,10 +19,15 @@ const mysql = require('mysql2/promise');
 // Every process prints its resolved target on startup — no process writes to a
 // database it did not announce.
 
+// THREE targets, and each must be asked for by name. Prod is the fallback because it is
+// what the deployed container has no flags for — which is also why forgetting the flag
+// once sent local probes to production on 2026-07-30. Use ./scripts/staging.
 const target =
-  process.argv.includes('--target=staging') || process.env.DB_TARGET === 'staging'
-    ? 'staging'
-    : 'prod';
+  process.argv.includes('--target=rehearsal') || process.env.DB_TARGET === 'rehearsal'
+    ? 'rehearsal'
+    : process.argv.includes('--target=staging') || process.env.DB_TARGET === 'staging'
+      ? 'staging'
+      : 'prod';
 
 function fail(msg) {
   console.error(`[db] FATAL: ${msg}`);
@@ -57,7 +62,24 @@ function parseUrl(raw, varName) {
 
 let config;
 
-if (target === 'staging') {
+if (target === 'rehearsal') {
+  // A throwaway mysql:8.0.41 container holding a restored prod dump at prod's sql_mode.
+  // It gets its OWN target name rather than borrowing the prod DB_* variables, because
+  // a boot line reading `target=PROD host=127.0.0.1` is exactly the misleading output
+  // that this project has already been bitten by once. What the line says and where the
+  // traffic goes must never require interpretation.
+  const raw = process.env.REHEARSAL_DATABASE_URL;
+  if (!raw) {
+    fail('--target=rehearsal requires REHEARSAL_DATABASE_URL to be set. ' +
+         'Refusing to fall back to the prod DB_* variables.');
+  }
+  config = parseUrl(raw, 'REHEARSAL_DATABASE_URL');
+  const prodHost = process.env.DB_HOST;
+  if (prodHost && config.host === prodHost) {
+    fail(`REHEARSAL_DATABASE_URL host (${config.host}) equals DB_HOST (${prodHost}). ` +
+         'Refusing to start.');
+  }
+} else if (target === 'staging') {
   const raw = process.env.STAGING_DATABASE_URL;
   if (!raw) {
     fail('--target=staging requires STAGING_DATABASE_URL to be set. ' +
