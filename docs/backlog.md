@@ -190,3 +190,38 @@ structure to exist before the results do.
 The 2026 brackets are the regression suite for any of this: whatever ships must still
 partition OR 38/38 and WA 43/43 with zero orphans and zero overlaps, and still produce
 the lopsided trees rather than tidy balanced ones.
+
+---
+
+## Seeds and auto-qualifier status as DATA — candidate, post-launch
+
+Oregon users used to see a seed number on every bracket team, an AUTO pill on conference
+auto-qualifiers, and a BYE pill on seeds 1–8. P6 removed all three when `buildBrackets`
+died.
+
+**The information was real; its derivation was not.** The client computed seeds by
+ordering the LaxNumbers rankings and inferred auto-qualifiers by taking the top-ranked
+team in each conference. That reproduced the true field only for as long as the rankings
+happened to agree with it, could not run outside Oregon, and is the same class of error
+as computing bracket layout from `field_size`. Removing it was correct. Losing what it
+displayed was a real cost to Oregon users, and this is the entry that says so.
+
+### The right way, if it comes back
+
+Seeds and auto-qualifier status are **league-published facts**, exactly like a bracket's
+field size and its final. They belong in `playoff_formats` (or a child table keyed to it)
+as seeded data, resolved by natural key, and rendered as cell adornments.
+
+ENRICHMENT, NEVER DERIVATION. The adornment hangs off a game cell that the graph already
+placed; it must not influence which bracket a game belongs to, which column it sits in,
+or which cell feeds which. If a seed is missing the cell renders without it — the same
+way a missing conference renders no chip rather than an "Unknown" bucket.
+
+### Do not build this pre-emptively
+
+The decision is **how the new screen actually feels on-device**, not a pre-emptive
+restoration of what was there. A bracket tree shows the shape of a tournament in a way a
+list of round cards could not; seed numbers may turn out to be noise on it, or may turn
+out to be exactly what is missing. Spencer's P7 device session is the input. Deciding
+before then would be rebuilding from memory of a screen whose generating logic was
+condemned.
