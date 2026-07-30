@@ -377,7 +377,40 @@ the general one.
 
 ## Window #2 — playoff graph, stale fixtures, forfeits
 
-**Status: DRAFT, awaiting Spencer's window. Nothing pushed. No prod migration.**
+**Status: ✅ EXECUTED 2026-07-30 on Spencer's explicit go. All 10 commits pushed and
+deployed. Sections J(2-5)/K/L applied. Backfills committed. 18/18 endpoints healthy and
+every written expected-diff assertion verified against live prod.**
+
+### ⚠️ Executed in REORDERED form — push before migrate
+
+The written sequence stops and restarts `varsitylax-cron` (steps 3 and 8). A standing
+instruction forbids touching `varsitylax-cron` or `varsitylax-api` in any way, and
+"run window #2" was not treated as lifting it. The window ran in an order that never
+touches either service:
+
+```
+dump anchor → PUSH → smoke (expect 16/18) → J(2-5)/K/L → backfills → OR seed
+            → smoke (expect 18/18) → cron-cycle watch → expected-diff vs live prod
+```
+
+**Why the ordering hazard disappears.** Stopping cron was necessary because the
+stale-resurrection guard ships in the code push while the stale backfill lands earlier —
+a cron cycle in that gap would flip all 9 rows back to `scheduled` via
+`ON DUPLICATE KEY UPDATE status = VALUES(status)`. Pushing FIRST puts the guard live
+before any stale row exists, so cron running throughout is a non-event rather than a
+race.
+
+**The cost, bounded and measured rather than argued.** Between the deploy and section L,
+`/api/v2/playoff-formats` returns 500 and `/schedule/playoffs` silently drops its graph
+fields (`attachGraph` catches its own errors by design). Nothing consumes either: the
+shipped app predates both, and the iOS build that needs them is unreleased. That degraded
+state is **exactly the baseline rehearsal run** — 16/18 with only the two
+`playoff-formats` checks failing — so it was a known signature to assert against, not a
+window to hope through.
+
+**Checkpoint at every phase boundary.** Smoke asserted the expected state after the push
+(16/18, precise failure signature) and after L (18/18). A degraded state you can name is
+a checkpoint; one you assume is a hazard.
 
 Seven commits sit unpushed on `main` (`e73f216`…`27f179d`). Like window #1 this is one
 **coupled** release: the code at HEAD requires sections J, K and L, and the schema is
@@ -524,6 +557,40 @@ The nine, all Oregon, all `scheduled` with no score:
 The 04-10 cluster is a cluster in the DATA, not in the process — all nine were created by
 the same v1→v2 backfill, and 04-10 is simply a date OHSLA still lists fixtures for. See
 `docs/data-quirks.md`.
+
+### ✅ Execution record — 2026-07-30
+
+```
+anchor dump          516K, 18 tables, terminator present, taken BEFORE anything
+pre-state            354 games / 9 scheduled / 345 completed / 0 typed / 0 forfeits
+push                 3607fa8..8521ae2, 10 commits, auto-deployed
+deploy detected      playoff-formats 404 -> 500 (route now exists, table does not)
+smoke #1             16/18 — ONLY the two playoff-formats checks failing ✓ rehearsed
+J statements 2-5     0 / 0 / 0 / 0 rows — the no-op claim, executed on prod
+K                    status ENUM now includes 'stale'; stale_exemptions + v_stale_watch
+L                    playoff_formats + v_playoff_format_anchors
+backfill game_type   38 in window, 0 already typed, 0 skipped, 38 typed, 0 non-completed
+markStaleFixtures    9 marked — the nine documented rows, all OHSLA
+seed --state=OR      2 brackets, OR 38/38 assigned, 0 orphans, 0 overlaps, 2/2 anchors
+smoke #2             18/18 healthy
+```
+
+**Expected diff verified against LIVE PROD — all 14 assertions passed:**
+
+| assertion | result |
+|---|---|
+| Oregon `schedule/all` 354 → 345 | 345 ✓ |
+| `/playoff-formats` new endpoint | 2 brackets ✓ |
+| `bracketKey` / `round` / `advancesTo` | 38 / 38 / 36 ✓ |
+| `isForfeit`, `dateKey` on every game | 345 / 345 ✓ |
+| `rankPosition` on every rankings row | 41 ✓ |
+| `playoffSource` → `game_type` | ✓ |
+| both Oregon finals share one day | ✓ |
+| `declared == resolved` | ✓ |
+| rankings 41, teams 41, v1 684 — unchanged | ✓ |
+
+Prod's `date` confirmed as `2026-03-16T00:00:00.000Z` with `dateKey` `2026-03-16` —
+the environment-dependent time component documented in `docs/api-contract.md` §1.3.
 
 ### Sequence
 
