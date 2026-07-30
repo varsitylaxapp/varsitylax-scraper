@@ -296,3 +296,42 @@ Shipping (b) without (c) is the low-risk path and is recommended.
   **Not a release blocker** — unattached, and it touches nothing this release
   uses.
 - 2027 Sportability 10-day recent-scores polling
+
+---
+
+## Post-release, tied to the iOS build carrying the out-of-state tag
+
+### `mountain_view_wa` display rename — SEQUENCED, not merely pending
+
+```bash
+node scripts/strip-state-suffix-mountain-view.js            # dry run against prod
+node scripts/strip-state-suffix-mountain-view.js --commit    # apply
+```
+
+**Run only AFTER the App Store build carrying the out-of-state tag is LIVE** —
+approved and released, not merely submitted.
+
+This is sequencing, not caution. `mountain_view_wa` is named `"Mountain View (WA)"`
+on prod today, and that suffix is the *only* thing distinguishing it from Oregon's
+own `mt_view` ("Mountain View") on a prod user's screen. Prod has exactly one game
+referencing it — Hillsboro, 2026-04-29 — which an Oregon user sees on Hillsboro's
+schedule.
+
+Rename before the tag ships and that row reads a bare "Mountain View", ambiguous
+with the Oregon team of the same name, for however long review takes. The tag is
+what takes over the disambiguating job; until it is on devices, the suffix is still
+doing real work.
+
+Ruled 2026-07-29: canonical display names are context-free; disambiguation is the
+tag's job, derived per viewing context. Staging is already renamed, which is safe
+because staging is only ever read by a Debug build carrying the tag.
+
+**Prod needs one row staging did not.** Prod has no bare `"Mountain View"` alias for
+the WA team, so after the rename its own display name would not resolve back to it.
+The script detects and inserts it; it is idempotent and refuses if the current name
+is anything other than `"Mountain View (WA)"`.
+
+Verify after: both `"Mountain View"` and `"Mountain View (WA)"` resolve to
+`mountain_view_wa` under `state='WA'`, and `"Mountain View"` still resolves to
+`mt_view` under `state='OR'`. The script asserts all three and rolls back if any
+fails.
