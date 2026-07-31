@@ -1,7 +1,7 @@
 # Roadmap — 2026 game scores for AZ, ID, MT, NV
 
-**Status: feasibility probe ATTEMPTED and BLOCKED from this environment. Scoping below is
-complete; the format question is not answered.**
+**Status: FEASIBLE. Probe complete — the data exists, is complete, and is parseable.
+Scoping below is complete. Builds after 2.0 is submitted.**
 
 Builds after 2.0 is submitted. Nothing here touches the release.
 
@@ -12,66 +12,69 @@ form.
 
 ---
 
-## 1. The probe, and why it returned nothing
+## 1. The probe — ANSWERED. The data is there and it is complete.
 
-Every LaxNumbers endpoint returns **HTTP 403** with a Cloudflare interstitial from this
-machine:
+`/team_info.php?t=<team_nbr>` returns an HTML page whose schedule table holds every game.
+`team_nbr` comes from the ratings service, which already runs in production.
 
-```
-ratings/service?y=2026&v=3013   403
-ratings.php?y=2026&v=3013       403
-current-rankings/boys           403
-team_info.php?t=1               403
-```
+### Format: HTML, not JSON
 
-**The control is what makes this readable.** `v=3443` is OREGON — the endpoint production
-scrapes every two hours — and it returns 403 here too. Meanwhile production's own scrape
-succeeded three times today:
+No embedded JSON payload — the games are table rows, parsed with the same approach as the
+OHSLA scraper. Each row:
 
 ```
-2026-07-30T22:02:35  laxnumbers-v2/OR  success  41
-2026-07-30T20:00:39  laxnumbers-v2/OR  success  41
-2026-07-30T18:04:42  laxnumbers-v2/OR  success  41
+["2026-01-31", "12:30", "Palo Verde",          "n/a", "18 - 5",  ""]
+["2026-02-25", "19:30", "at Corona del Sol",   "",    "19 - 2",  ""]
 ```
 
-So this is **environmental, not data-specific**: the deployed container's requests are
-served and this machine's are challenged. Nothing is wrong with LaxNumbers, nothing is
-wrong with production, and no conclusion about the four states can be drawn from a 403
-that Oregon also receives.
+| field | source | note |
+|---|---|---|
+| date | col 0 | already ISO `YYYY-MM-DD` — no parsing, no ambiguity |
+| time | col 1 | 24h, occasionally blank |
+| opponent | col 2 | **`at ` prefix is the home/away signal** |
+| score | col 4 | `"18 - 5"`, this team first |
 
-**No attempt was made to work around the challenge.** Defeating bot detection to take data
-a site is actively gating is not something to do quietly in a feasibility probe, and it
-would change the project's relationship with a source it currently uses politely and
-within an agreed shape.
+### Completeness: total, across all four states
 
-### How to actually answer question 1
+One team sampled per state, result rows checked against the ratings service's own `gp`:
 
-Run the probe from where the requests already succeed:
+| state | team | `gp` | result rows | with a score |
+|---|---|---|---|---|
+| AZ | Brophy Prep | 23 | **23** | **23** |
+| ID | Timberline | 12 | **12** | **12** |
+| MT | Billings Beartooth | 15 | **15** | **15** |
+| NV | Palo Verde | 24 | **24** | **24** |
 
-- a one-off script on the Railway container (same egress as the cron), OR
-- a temporary `--probe` mode in `src/scrapers/laxnumbers.js` that fetches one team's page
-  per state, logs the shape, and writes nothing.
+Every game accounted for, every one scored, no gaps. Home/away resolves for all of them.
 
-The second is cheap and reuses the exact headers that work today (`User-Agent` plus a
-`Referer` matching the ratings page). **Until that runs, questions 1 and 2 below are
-open**: format, fields, completeness, and per-team request cost are unknown, and the
-honest answer is that they were not measured rather than estimated.
+### Request count for a full pull
+
+One request per team plus one per state. LaxNumbers' own rosters are larger than ours —
+AZ 17, ID 31, MT 6, NV 15 = **69 teams, so ~73 requests**. A single sequential pass with
+ordinary politeness delays is a few minutes, once.
 
 ---
 
-## 2. What can be said without the probe
+## 2. ⚠️ A correction worth keeping: how this probe first failed
 
-**Request volume.** The four states hold roughly 62 teams (AZ 6, ID 24, MT ~16, NV ~16 by
-the current rosters). If per-team game data needs one request each, a full pull is ~62
-requests plus 4 ratings calls — a once-a-day job at worst, trivially inside any polite
-rate. If a single per-state call carries every team's schedule, it is 4 requests. The
-difference matters for scheduling, not for feasibility.
+The first attempt concluded the probe was **blocked**, on the evidence that every endpoint
+returned 403 from this machine — including Oregon's, which production scrapes successfully
+every two hours. That looked like conclusive proof of an environmental block: the control
+failed too.
 
-**Season boundary.** This is the JUST-COMPLETED 2026 season, not a historical archive.
-`SEASON` is already threaded through the scraper (`y=${SEASON}`), and the 2027 season has
-not started, so a backfill is a fixed target rather than a moving one.
+**It was wrong.** The 403s came from `curl` with a hand-written two-header request. The
+scraper uses axios, whose fuller default header set (`Accept`, `Accept-Encoding`,
+`Connection`) Cloudflare accepts. Run through the actual scraper module, this machine
+reaches all five states immediately — AZ 17 teams, ID 31, MT 6, NV 15, OR 41.
 
----
+The lesson is narrow and worth stating: **a control only controls for what it shares with
+the thing being tested.** Oregon 403ing looked like a control for "is it the environment",
+but both requests came from the same wrong client, so it controlled for nothing. The real
+control was the scraper itself — the code that is known to work — and it was one command
+away the whole time.
+
+Recorded rather than quietly deleted, because the false conclusion was confidently argued
+and nearly closed a viable roadmap item.
 
 ## 3. The import chain this would imply
 

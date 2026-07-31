@@ -141,3 +141,27 @@ A bye is a team whose first game is at a shallower round than the bracket's deep
 `/schedule/playoffs` represents one, and nothing should: the absence of a round-3 game
 for that team *is* the bye. See `scripts/test-playoff-graph.js`, which asserts no
 placeholder game is invented.
+
+---
+
+## LaxNumbers and Cloudflare: the client matters more than the vantage
+
+`www.laxnumbers.com` sits behind Cloudflare, and whether a request is served depends on
+the **header set**, not on where it comes from.
+
+The scraper's axios calls — which send `Accept`, `Accept-Encoding` and `Connection` by
+default alongside the explicit `User-Agent` and `Referer` — are served from a developer
+machine and from the Railway container alike. A hand-written `curl` with only those two
+explicit headers gets **403 and a Cloudflare interstitial for every path**, including the
+one production scrapes successfully every two hours.
+
+**So neither local success nor local failure is evidence about the source.** On 2026-07-30
+a feasibility probe concluded LaxNumbers was blocking this machine, on the strength of
+Oregon's known-good endpoint 403ing too — a control that controlled for nothing, because
+both requests came from the same wrong client. The scraper module reached all five states
+immediately.
+
+**Probe through `src/scrapers/laxnumbers.js`, never through ad-hoc curl.** If a raw
+request is unavoidable, copy axios's default headers rather than the two the code names
+explicitly. Cloudflare's posture also drifts over time, so a result from either client is
+worth re-checking rather than remembering.
