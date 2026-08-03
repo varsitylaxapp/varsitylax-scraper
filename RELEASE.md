@@ -437,6 +437,40 @@ testers** — not degraded, empty, because `buildBrackets` no longer exists to f
 So window #2 slots **before or alongside** the app release. It is not housekeeping.
 Stage (c) (Washington content) remains separate and is not required for TestFlight.
 
+### ✅ Closing gate — confirmed over 38 cycles, not one
+
+The watch armed on the night of the window died on a transient network error
+(`EADDRNOTAVAIL`) before a cycle landed. Rather than re-arm for a single cycle, the gate
+was confirmed three days later against everything that had accumulated — stronger
+evidence than the original design asked for.
+
+```
+laxnumbers-v2/WA   success × 38   2026-07-31T00:04 → 2026-08-03T02:04
+laxnumbers-v2/OR   success × 38   same window
+laxpower-v2/OR     success × 38
+ohsla-v2/OR        success × 36
+non-success rows:  0
+the nine:          3 8 17 31 71 140 257 288 360 — ALL still 'stale'
+```
+
+**WA rankings are CARRIED, not backfilled once.** That was the distinction the gate
+existed for: 38 successful WA scrapes across three days means `enabled: true` took, and
+the state will not silently freeze at whatever the one-off captured.
+
+**The nine stale rows survived 36 further OHSLA cycles**, each re-asserting all 354
+fixtures. The resurrection guard holds under sustained load, not just the first pass.
+
+#### One number that needed explaining: 38 scrapes, 1 snapshot
+
+`rankings_snapshots` holds a single WA row, from the backfill. That is correct and not a
+silent write failure: snapshots are **content-addressed**, so a row is written only when
+the rankings actually change. Oregon proves the same behaviour — its latest `laxnumbers`
+snapshot is **2026-07-11**, three weeks stale, despite its own 38 successful scrapes in
+this window. It is the offseason; the ratings are not moving.
+
+Worth knowing before March 2027, when both states start producing a new snapshot most
+cycles and this number stops being a flat line.
+
 ### What ships
 
 | # | change | kind |
@@ -672,7 +706,7 @@ step that differs materially from its staging rehearsal.
 
 ## Window #3 — stage (c): Washington goes live
 
-**Status: REHEARSED 2026-07-30, gate green. Awaiting Spencer's window. Nothing applied.**
+**Status: ✅ CLOSED. Executed 2026-07-30, gate confirmed 2026-08-03 over 38 cron cycles.**
 
 The release the 2.0 notes are written for. Until this runs, `/states` advertises
 Washington as fully capable while serving 16 teams of 76, no rankings, no brackets and
