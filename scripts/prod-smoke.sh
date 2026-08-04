@@ -46,9 +46,16 @@ CHECKS=(
   "/api/v2/rankings/laxnumbers?season=$SEASON|200|rankings|41"
   "/api/v2/rankings/laxpower?season=$SEASON|200|rankings"
   "/api/v2/rankings/both?season=$SEASON|200|season"
-  "/api/v2/rankings/laxnumbers?season=$SEASON&state=AZ|404|error"
+  # AZ rankings: 404 until window #4-lite's backfill lands, 200 with 17 rows after.
+  "/api/v2/rankings/laxnumbers?season=$SEASON&state=AZ|200|rankings|15"
+  "/api/v2/rankings/laxnumbers?season=$SEASON&state=ID|200|rankings|28"
+  "/api/v2/rankings/laxnumbers?season=$SEASON&state=MT|200|rankings|5"
+  "/api/v2/rankings/laxnumbers?season=$SEASON&state=NV|200|rankings|13"
   "/api/v2/schedule/all?season=$SEASON|200|games|300"
-  "/api/v2/schedule/all?season=$SEASON&state=WA|200|season"
+  # Was |200|season — it asserted that a key called "season" existed and printed 2026, so it
+  # could not fail no matter how many WA games were served, including none. Same class as the
+  # five WA checks that passed against a database with no Washington data.
+  "/api/v2/schedule/all?season=$SEASON&state=WA|200|games|500"
   "/api/v2/schedule/playoffs?season=$SEASON|200|games|38"
   "/api/v2/schedule/team/oes?season=$SEASON|200|games"
   "/api/v2/schedule/team/nope?season=$SEASON|404|error"

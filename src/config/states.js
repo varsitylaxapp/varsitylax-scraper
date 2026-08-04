@@ -114,7 +114,7 @@ const STATES = {
     leagueName: 'Arizona Lacrosse League',   // single official league for AZ boys
     divisions: [{ id: 'az_open', name: 'All', isDefault: true, sortOrder: 0 }],
     regions: null,
-    capabilities: { hasRankings: true, hasSchedules: false, hasPlayoffs: false },
+    capabilities: { hasRankings: true, hasSchedules: true, hasPlayoffs: false },
     scheduleSource: null, playoffs: null,
   },
   ID: {
@@ -129,7 +129,7 @@ const STATES = {
     leagueName: null,
     divisions: [{ id: 'id_open', name: 'All', isDefault: true, sortOrder: 0 }],
     regions: null,
-    capabilities: { hasRankings: true, hasSchedules: false, hasPlayoffs: false },
+    capabilities: { hasRankings: true, hasSchedules: true, hasPlayoffs: false },
     scheduleSource: null, playoffs: null,
   },
   MT: {
@@ -139,7 +139,7 @@ const STATES = {
     leagueName: 'Montana High School Lacrosse League',
     divisions: [{ id: 'mt_open', name: 'All', isDefault: true, sortOrder: 0 }],
     regions: null,
-    capabilities: { hasRankings: true, hasSchedules: false, hasPlayoffs: false },
+    capabilities: { hasRankings: true, hasSchedules: true, hasPlayoffs: false },
     scheduleSource: null, playoffs: null,
   },
   NV: {
@@ -152,7 +152,7 @@ const STATES = {
     leagueName: null,
     divisions: [{ id: 'nv_open', name: 'All', isDefault: true, sortOrder: 0 }],
     regions: null,
-    capabilities: { hasRankings: true, hasSchedules: false, hasPlayoffs: false },
+    capabilities: { hasRankings: true, hasSchedules: true, hasPlayoffs: false },
     scheduleSource: null, playoffs: null,
   },
 };

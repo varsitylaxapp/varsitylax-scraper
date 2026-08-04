@@ -28,6 +28,30 @@ to the production database, and `src/db.js` will refuse to start if
 
 Override the port with `PORT=3999 node src/api.js --target=staging`.
 
+### A local API starts with a task and dies with it. Never leave one running.
+
+Stop it when the thing you started it for is finished, and check the port is clear:
+
+```bash
+lsof -nP -iTCP:3000 -sTCP:LISTEN     # expect no output
+```
+
+**This is not tidiness — a long-lived stray on :3000 is a proven gate-inverter.** On
+2026-08-04 a `node src/api.js` left running since 07:49, pointed at staging, held the port
+while `rehearse-on-prod-schema.sh` booted its own API against a production dump. The new
+process lost the port and every request in the smoke went to the stray one. **Four
+consecutive runs certified "HEAD boots and serves against prod's schema" while measuring
+staging** — in the gate built specifically to stop greens that had run against staging.
+
+A stray is dangerous precisely because it answers. Nothing times out, nothing errors, and
+the numbers look plausible; they are simply about a different database. It cost a set of
+published pins and an invented "lost write" anomaly that was chased for hours.
+
+The rehearsal now defends itself — dedicated port, refused if occupied; the API's own
+`[db]` line must read `REHEARSAL` and its **absence is fatal**; and API and container are
+asked the same question and must agree. Those defences exist because this rule was broken,
+not as a substitute for it.
+
 ```bash
 curl -s localhost:3000/api/v2/states | jq
 curl -s 'localhost:3000/api/v2/rankings/laxnumbers?state=OR' | jq '.rankings | length'

@@ -66,6 +66,17 @@ trap teardown EXIT
 command -v docker >/dev/null || die "docker not installed (brew install colima docker && colima start)"
 docker info >/dev/null 2>&1 || die "docker daemon not running (colima start)"
 
+
+# (d) PROVENANCE PROBE — Oregon's feed size at each stage, so 380 -> 347 has named terms
+# rather than a plausible story. Counts HEAD's own predicate for /schedule/all?state=OR.
+or_feed() {
+  mysh -N -e "SELECT COUNT(*) FROM $DBN.games g
+                JOIN $DBN.teams ht  ON ht.id  = g.home_team_id
+                JOIN $DBN.teams at2 ON at2.id = g.away_team_id
+               WHERE g.season=2026 AND g.status<>'stale'
+                 AND (ht.state='OR' OR at2.state='OR')"
+}
+
 # ── 1. fresh prod dump ───────────────────────────────────────────────────────
 say "1. fresh prod dump  (READ ONLY)"
 node -e "
@@ -232,6 +243,7 @@ if [ "$WINDOW4" = "1" ]; then
   # THE DDL RUNS HERE, at prod's sql_mode, not just the data. Section M is a MODIFY
   # COLUMN on a CHAR(2) NOT NULL, and a column-modifying statement is exactly the class
   # that behaves differently under a different mode — the reason this gate exists.
+  echo "      [d-probe] Oregon feed BEFORE window #4: $(or_feed)"
   echo "   a. section-m — teams.state becomes nullable (DDL, at prod sql_mode)"
   docker exec -i "$CONTAINER" mysql -uroot -p"$ROOTPW" "$DBN" < migrations/section-m-nullable-team-state.sql \
     || die "section M failed"
@@ -240,15 +252,38 @@ if [ "$WINDOW4" = "1" ]; then
   echo "      teams.state IS_NULLABLE → $NULLABLE"
   [ "$NULLABLE" = "YES" ] || die "section M did not take"
 
-  echo "   b. rankings backfill — the four states join the cron rotation"
-  for ST in AZ ID MT NV; do
-    node scripts/scrape-state-rankings.js $ST --commit 2>&1 \
-      | grep -E "ALL CHECKS PASSED|FAIL|delta:" | sed "s/^/     $ST /"
-  done
-
-  echo "   c. roster + games for the four states"
+  echo "   b. roster + games for the four states"
   node scripts/import-laxnumbers-games.js --state=AZ,ID,MT,NV --commit 2>&1 \
     | grep -E "collision:|roster —|imported|UNEXPLAINED|COMMITTED|ROLLED|UNRESOLVED" | sed 's/^/     /'
+
+  # RANKINGS RUN AFTER THE ROSTER, NOT BEFORE. scrape-state-rankings has a ROSTER LOCK —
+  # it creates no teams by design — so running it first means only the handful of teams
+  # that already existed as cross-border opponents resolve, and the rest are logged
+  # unresolved. The first rehearsal did exactly that and produced no snapshot at all,
+  # which surfaced as /rankings?state=AZ still 404ing after a "successful" window.
+  echo "      [d-probe] Oregon feed AFTER import: $(or_feed)"
+  echo "   c. rankings backfill — AFTER the roster, so the teams exist to resolve against"
+  for ST in AZ ID MT NV; do
+    node scripts/scrape-state-rankings.js $ST --commit 2>&1 \
+      | grep -E "ALL CHECKS PASSED|resolves against|FAIL" | sed "s/^/     $ST /"
+  done
+
+  # PERSISTENCE IS ASSERTED HERE, INDEPENDENTLY, AND IT FAILS THE GATE.
+  #
+  # The rehearsal and the production window run THE SAME assertion script — a rehearsal
+  # that checks something the window does not proves nothing about the window. See the
+  # header of scripts/assert-rankings-persisted.js for the incident and why the check
+  # cannot live inside the writer.
+  # Captured, not piped: `node ... | sed` reports SED's exit status, so `if !` could never
+  # fire and the guard against vacuous checks would itself have been one. The full output
+  # is echoed unfiltered — the [db] boot line and the server-identity line are the evidence.
+  ASSERT_OUT=$(node scripts/assert-rankings-persisted.js --season=2026 --states=AZ,ID,MT,NV 2>&1)
+  ASSERT_RC=$?
+  printf '%s\n' "$ASSERT_OUT" | sed 's/^/     /'
+  if [ "$ASSERT_RC" -ne 0 ]; then
+    echo "      Do NOT run this window on production until it is explained."
+    exit 1
+  fi
 
   echo "   d. geographic coherence — the truth-anchored check"
   node scripts/check-geographic-coherence.js --states=AZ,ID,MT,NV 2>&1 \
@@ -261,15 +296,63 @@ fi
 say "$([ "$WINDOW2" = 1 ] && echo 7 || echo 5). boot HEAD's API against the rehearsal schema"
 export DB_TARGET=rehearsal
 export REHEARSAL_DATABASE_URL="mysql://root:$ROOTPW@127.0.0.1:$PORT/$DBN"
-node src/api.js > "$WORK/api.log" 2>&1 &
+# ─────────────────────────────────────────────────────────────────────────────
+# THE GATE MUST TALK TO ITS OWN CONTAINER. 2026-08-04: it did not.
+#
+# A stray `node src/api.js` from an earlier session had been listening on port 3000 since
+# 07:49, serving STAGING. This script booted its own API, that process lost the port, and
+# every request in the smoke went to the stray one. Four consecutive runs reported
+# "32/32 GATE PASSED — HEAD boots and serves against prod's schema" while measuring
+# staging, which is the exact thing this gate exists to rule out and the exact shape of the
+# outage that created it: every green was true and irrelevant.
+#
+# It also manufactured the "lost snapshot" anomaly. Run 1 served 404 for ID/MT/NV because
+# STAGING had no snapshots for them yet; later runs passed because the reproduction attempt
+# had since created them there. Nothing was ever lost.
+#
+# Three structural defences, because "remember to check the port" is not one:
+#   1. A DEDICATED PORT, refused outright if occupied — no silent fallback to a stray.
+#   2. The booted API's OWN [db] line must say REHEARSAL, and its ABSENCE is fatal. The old
+#      code grepped for it and carried on when the grep found nothing, which is how a
+#      missing boot line went unnoticed for four runs.
+#   3. A TRUTH ANCHOR: ask the API and the container the same question and require the same
+#      answer. (1) and (2) verify we configured it right; only (3) verifies the bytes on the
+#      wire came from the database we think they did.
+# ─────────────────────────────────────────────────────────────────────────────
+API_PORT=${API_PORT:-3010}
+if lsof -nP -iTCP:$API_PORT -sTCP:LISTEN >/dev/null 2>&1; then
+  echo "   port $API_PORT is already in use — refusing to boot, because the smoke would"
+  echo "   silently interrogate whatever is already there. Free it or set API_PORT."
+  die "rehearsal API port occupied"
+fi
+API_BASE="http://localhost:$API_PORT"
+PORT=$API_PORT node src/api.js > "$WORK/api.log" 2>&1 &
 API_PID=$!
-for i in $(seq 1 40); do curl -sf -o /dev/null --max-time 2 localhost:3000/api/v2/states && break; sleep 0.5; done
-grep -m1 "^\[db\]" "$WORK/api.log" | sed 's/^/   /'
-curl -sf -o /dev/null --max-time 3 localhost:3000/api/v2/states || { tail -20 "$WORK/api.log"; die "API did not boot"; }
+for i in $(seq 1 40); do curl -sf -o /dev/null --max-time 2 "$API_BASE/api/v2/states" && break; sleep 0.5; done
+curl -sf -o /dev/null --max-time 3 "$API_BASE/api/v2/states" || { tail -20 "$WORK/api.log"; die "API did not boot"; }
+
+API_DBLINE=$(grep -m1 "\[db\]" "$WORK/api.log")
+[ -n "$API_DBLINE" ] || { tail -20 "$WORK/api.log"; die "API printed no [db] boot line — cannot confirm which database it opened"; }
+echo "   $API_DBLINE"
+case "$API_DBLINE" in
+  *target=REHEARSAL*) ;;
+  *) die "the booted API is NOT on the rehearsal database: $API_DBLINE" ;;
+esac
+
+# Truth anchor — same question, both sources, must agree.
+API_OR=$(curl -sf --max-time 10 "$API_BASE/api/v2/schedule/all?season=2026&state=OR" \
+         | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).games.length))")
+SQL_OR=$(mysh -N -e "SELECT COUNT(*) FROM $DBN.games g
+                       JOIN $DBN.teams ht  ON ht.id  = g.home_team_id
+                       JOIN $DBN.teams at2 ON at2.id = g.away_team_id
+                      WHERE g.season=2026 AND g.status<>'stale'
+                        AND (ht.state='OR' OR at2.state='OR')")
+echo "   truth anchor — Oregon feed: API=$API_OR  container=$SQL_OR"
+[ "$API_OR" = "$SQL_OR" ] || die "API ($API_OR) and rehearsal container ($SQL_OR) disagree — the API is serving a different database"
 
 # ── 8. the actual gate ───────────────────────────────────────────────────────
 say "$([ "$WINDOW2" = 1 ] && echo 8 || echo 6). prod-smoke.sh against HEAD on prod's schema"
-./scripts/prod-smoke.sh http://localhost:3000
+./scripts/prod-smoke.sh "$API_BASE"
 SMOKE=$?
 
 # ── 9. the written expected diff, asserted ───────────────────────────────────
@@ -280,7 +363,7 @@ if [ "$WINDOW2" = "1" ]; then
     if [ "$2" = "$3" ]; then printf "   ok    %-46s %s\n" "$1" "$2"
     else printf "   FAIL  %-46s %s (expected %s)\n" "$1" "$2" "$3"; EXPECT_FAIL=$((EXPECT_FAIL+1)); fi
   }
-  j() { curl -s --max-time 20 "http://localhost:3000$1" | python3 -c "import json,sys;d=json.load(sys.stdin);$2"; }
+  j() { curl -s --max-time 20 "$API_BASE$1" | python3 -c "import json,sys;d=json.load(sys.stdin);$2"; }
 
   chk "Oregon schedule/all: 354 -> 345"  "$(j '/api/v2/schedule/all?season=2026' 'print(len(d["games"]))')" "345"
   chk "playoff-formats is a NEW endpoint" "$(j '/api/v2/playoff-formats?season=2026' 'print(len(d["brackets"]))')" "2"
@@ -300,7 +383,7 @@ if [ "$WINDOW3" = "1" ]; then
   W3_FAIL=0
   c3() { if [ "$2" = "$3" ]; then printf "   ok    %-44s %s\n" "$1" "$2"
          else printf "   FAIL  %-44s %s (expected %s)\n" "$1" "$2" "$3"; W3_FAIL=$((W3_FAIL+1)); fi; }
-  j3() { curl -s --max-time 25 "http://localhost:3000$1" | python3 -c "import json,sys;d=json.load(sys.stdin);$2"; }
+  j3() { curl -s --max-time 25 "$API_BASE$1" | python3 -c "import json,sys;d=json.load(sys.stdin);$2"; }
 
   echo "   WASHINGTON — empty/404 before, populated after:"
   c3 "teams 2026"        "$(j3 '/api/v2/teams?season=2026&state=WA' 'print(len(d["teams"]))')" "$W3_TEAMS"

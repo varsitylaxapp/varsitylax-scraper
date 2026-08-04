@@ -80,8 +80,19 @@ const q = async (s, p = []) => (await db.execute(s, p))[0];
 
   if (!COMMIT) { console.log('\n(dry run — nothing written)'); await db.end(); return; }
 
+  // WHERE THE SERVER SAYS THIS WRITE IS LANDING, recorded at execution time rather than
+  // inferred from config afterwards. On 2026-08-04 three snapshots reported written and
+  // were absent minutes later, and "the write was lost" could not be told apart from "the
+  // write went somewhere else" — both are a missing row. Config cannot separate them; it
+  // is what we intended. This is the server's own account of the connection it is serving,
+  // and scripts/assert-rankings-persisted.js prints the matching line from a separate
+  // process, so a recurrence yields two records to compare instead of one absence.
+  const [[srv]] = await db.execute(
+    'SELECT @@hostname AS h, DATABASE() AS db, @@port AS port, CONNECTION_ID() AS cid');
+  console.log(`\n[write] server says: hostname=${srv.h} database=${srv.db} port=${srv.port} connection=${srv.cid}`);
+
   const r = await dualWrite.writeRankings('laxnumbers', rankings, CODE);
-  console.log(`\nwriteRankings -> snapshot=${r.snapshotId ?? 'unchanged/skipped'} entries=${r.entries} unresolved=${r.unresolved.length}`);
+  console.log(`writeRankings -> snapshot=${r.snapshotId ?? 'unchanged/skipped'} entries=${r.entries} unresolved=${r.unresolved.length}`);
 
   const after = {
     snapshots: (await q('SELECT COUNT(*) n FROM rankings_snapshots'))[0].n,

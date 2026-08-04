@@ -248,7 +248,14 @@ no exceptions.
 
 ## Window #4-lite — AZ / ID / MT / NV game results
 
-**Status: STAGING-VERIFIED 2026-08-03. Awaiting Spencer's window. Nothing applied to prod.**
+**Status: REHEARSED ON A FRESH PROD DUMP 2026-08-04 — 32/32 endpoints healthy, zero
+coherence flags. Awaiting Spencer's window. Nothing applied to prod.**
+
+**These pins supersede everything measured before 2026-08-04 23:40.** Four earlier
+rehearsals reported 32/32 while their smoke was answered by a stray API serving staging —
+see "The gate that graded staging" below. The run behind the numbers above verified, on
+its own output, that the API it questioned was the rehearsal container: `target=REHEARSAL`
+in the API's own boot line, and API and container returning the same Oregon count.
 
 Ships the 2026 season for the four rankings-only states, so 2.0's story becomes
 "six states, full seasons" rather than "six states, four of them a ranked list".
@@ -271,7 +278,15 @@ the flips do not already cover.
 |---|---|---|
 | 1 | `teams.state` nullable | `section-m-nullable-team-state.sql` |
 | 2 | roster + games, four states | `import-laxnumbers-games.js --state=AZ,ID,MT,NV --stage-c --commit` |
-| 3 | `hasSchedules: false → true` ×4 | `src/config/states.js`, one line each |
+| 3 | rankings backfill ×4 — **after** step 2 | `scrape-state-rankings.js {AZ,ID,MT,NV} --commit` |
+| 4 | **persistence assertion — STOPS THE WINDOW** | `assert-rankings-persisted.js --season=2026 --states=AZ,ID,MT,NV` |
+| 5 | `hasSchedules: false → true` ×4 | `src/config/states.js`, one line each |
+
+**Step 4 is not optional and does not run "if there's time".** It is the same script the
+rehearsal runs — a rehearsal that checks something the window does not proves nothing about
+the window. If it exits non-zero, **stop**: do not flip the capability flags in step 5,
+because a flag turned on over a missing snapshot is precisely a 404 in a user's app. Keep
+its output together with step 3's `[write] server says:` lines; the pair is the evidence.
 
 Step 2 imports the ROSTER as well as the games: our rosters were 6/5/2/6, created
 incidentally as cross-border opponents, against 17/31/6/15 rated. Two thirds of the games
@@ -280,19 +295,124 @@ authority — the rankings already come from it — and the roster is explicitly
 superseded by a league export when SWILA/HSLL land. The importer header carries the
 succession plan.
 
-### Expected diff — PINNED ON STAGING, not computed
+### Expected diff — RE-PINNED 2026-08-04 ON A FRESH PROD DUMP
+
+Superseding the 2026-08-03 staging pin. These numbers come from `--window4` run against a
+fresh production dump at prod's MySQL version and `sql_mode`, with the corrected
+(state-scoped) import and the rankings backfill in place — not from staging, and not
+computed.
 
 | | before | after |
 |---|---|---|
-| AZ teams / games in feed | 6 / — | **17 / 122** |
-| ID teams / games in feed | 5 / — | **31 / 219** |
-| MT teams / games in feed | 2 / — | **3 / 29** |
-| NV teams / games in feed | 6 / — | **12 / 122** |
-| `laxnumbers`-sourced games | 0 | **475** |
-| teams with `state IS NULL` | 0 | **25** |
+| AZ teams created / games in feed | 6 / — | **+11 / 123** |
+| ID teams created / games in feed | 5 / — | **+27 / 219** |
+| MT teams created / games in feed | 2 / — | **+5 / 50** |
+| NV teams created / games in feed | 6 / — | **+10 / 135** |
+| `laxnumbers`-sourced games | 0 | **476** |
+| `laxnumbers` rankings snapshots | 0 | **4** — AZ 17, ID 31, MT 6, NV 15 |
 
-475 = 117 AZ + 211 ID + 36 MT + 111 NV, and the count ladder closes at **UNEXPLAINED 0**
+476 = 118 AZ + 211 ID + 36 MT + 111 NV, and the count ladder closes at **UNEXPLAINED 0**
 for every state.
+
+**476, not the 475 pinned yesterday.** The extra row is Arizona's (117 → 118). The import
+scrapes LaxNumbers live, so the source can gain a published result between two pins; the
+ladder still closes at 0 and geographic coherence still flags nobody. It is recorded as
+measured rather than reconciled to the older number.
+
+### The gate that graded staging — RESOLVED, and it invalidated four runs
+
+**2026-08-04.** A stray `node src/api.js`, started at 07:49 and left running, held port
+3000 and served **staging**. `rehearse-on-prod-schema.sh` booted its own API, that process
+lost the port, and every request in the smoke went to the stray one. Four consecutive runs
+printed **"32/32 GATE PASSED — HEAD boots and serves against prod's schema"** while
+measuring staging.
+
+This is gate #5's whole purpose inverted. It exists because the P5 outage shipped behind a
+wall of greens that had all run against staging; it then spent a day doing the same thing.
+**Every green was true and irrelevant** — the second time, in the tool built to stop it.
+
+It also manufactured the anomaly recorded below. There was never a lost write: run 1 served
+404 for ID/MT/NV because *staging* had no snapshots for them yet, and the later runs passed
+because the attempt to reproduce the "anomaly" had created them on staging in the meantime.
+The reproduction attempt WAS the fix, which is why it never reproduced.
+
+The tell was visible and I read past it: the API's `[db]` boot line was **absent** from the
+rehearsal output for four runs. The script grepped for it and carried on when the grep
+found nothing. **A boot line that is merely printed is not a check** — the same shape as a
+smoke check that asserts a key exists.
+
+What made it undeniable was asking the same question two ways: the container's own SQL said
+Oregon had 383 games while the API answering the smoke said 347. Two sources, one question,
+different answers.
+
+Three structural defences now, none of which is "remember to check the port":
+
+1. **A dedicated port, refused outright if occupied.** No silent fall-through to a stray.
+2. **The booted API's own `[db]` line must say `REHEARSAL`, and its absence is fatal.**
+3. **A truth anchor** — the API and the container are asked the same question and must
+   return the same number, printed on every run. (1) and (2) prove we configured it right;
+   only (3) proves the bytes on the wire came from the database we believe.
+
+Retracted with it: **347 / 528 / 541 were staging's numbers**, and so was the entire
+"HEAD filters 33 Oregon games" story built on them. Production serves 380 and 561 today,
+which is exactly what Spencer's screenshots showed.
+
+### The snapshot that reported success and was not there — CLOSED, see above
+
+**2026-08-04.** With the ordering fix in place, a `--window4` rehearsal ran the rankings
+backfill for all four states. Every state reported `resolves … unresolved: 0` and
+`=== ALL CHECKS PASSED ===`, including the writer's own `PASS snapshot exists for state`.
+Minutes later, in the same container, the API served **404 for ID, MT and NV**. Arizona,
+written by the same loop moments earlier, was fine.
+
+What has been ruled out, by inspection rather than by assumption:
+
+- **Not a delete.** Nothing in `src/`, `scripts/` or `migrations/` deletes from
+  `rankings_snapshots` or `ranking_entries`.
+- **Not something running in between.** Only the coherence check (read-only) and the API
+  boot sit between the loop and the smoke.
+- **Not an uncommitted read.** The writer opens no transaction; the inserts autocommit.
+- **Not the read path.** `latestSnapshot()` filters on `(source, season, state)` — it does
+  not pick one snapshot per season and mis-scope it.
+- **Not a pre-existing row masking Arizona.** Production holds `laxnumbers` snapshots for
+  OR and WA only, so AZ's 200 came from the loop's own write.
+- **Not reproducible.** Three consecutive delete-and-rewrite cycles of the identical loop
+  on staging persisted all four every time; two subsequent rehearsals passed 32/32.
+
+So: one red run, four greens, no mechanism. **It is intermittent and unexplained**, and
+the next green run is not evidence it is gone.
+
+The response is not a theory but a check. `scripts/assert-rankings-persisted.js` runs as a
+**separate process on its own connection** after the writer, in the rehearsal AND as step 4
+of the production window, and exits non-zero on any missing or empty snapshot. It lives
+outside the writer deliberately: the failing run proved a check inside the writer can only
+report that the writer believes itself.
+
+**It also had to be made falsifiable before being trusted.** Run against a state with no
+snapshot it exits 1 and names it; against the four real ones it exits 0. Wiring it into the
+rehearsal introduced a fifth vacuous check on the way in — `node … | sed` reports *sed's*
+exit status, so the `if !` guarding against vacuous checks could never itself fire. The
+status is now captured directly.
+
+**The instrumentation is the part that buys a future explanation.** Today "the write was
+lost" and "the write landed somewhere else" are indistinguishable — both are a missing row,
+and they call for opposite responses. Config can't separate them; config is what we
+intended. So the writer and the assertion each log `@@hostname`, `DATABASE()`, `@@port` and
+`CONNECTION_ID()` — the *server's* account of the connection it served. A recurrence now
+leaves two comparable records rather than one ambiguous absence.
+
+**Ledger entry: CLOSED — mechanism found, and it was not a lost write.** The snapshots
+always persisted; the API being asked about them was a different server holding a different
+database. The containment above is kept anyway: it is what turned an unfalsifiable absence
+into a discriminating question, and it is what the instrumentation was asked to do.
+
+### Rankings run AFTER the roster, and the ordering is load-bearing
+
+`scrape-state-rankings.js` holds a **roster lock** — it creates no teams by design. Run
+before the import, only the handful of teams that already existed as cross-border
+opponents resolve, no snapshot is written at all, and the failure surfaces far downstream
+as `/rankings?state=AZ` returning 404 after a window that reported success. The first
+rehearsal of this window did exactly that.
 
 #### ⚠️ OREGON AND WASHINGTON ARE NOT BYTE-STABLE — and the change is correct
 
@@ -301,11 +421,24 @@ rather than churn:
 
 | feed | before | after | added |
 |---|---|---|---|
-| Oregon `schedule/all` | 345 | **347** | +2 |
-| Washington `schedule/all` | 526 | **541** | +15 |
+| Oregon `schedule/all` | 380 | **383** | +3 |
+| Washington `schedule/all` | 561 | **563** | +2 |
 
-All 17 are genuine cross-border games our curated sources never had — Bend/Caldera vs
-Borah/Capital, Mountain View (WA) vs three Idaho schools, and so on. Nothing was removed.
+Both feeds gain genuine cross-border games our curated sources never had — Bend/Caldera vs
+Borah/Capital and so on. Nothing was removed.
+
+**The `before` column is live production, checked directly.** Earlier revisions of this
+table read 345 → 347 and 526 → 528. Those numbers came from STAGING, reached through a
+stray API the rehearsal was unknowingly talking to (below). They were never Oregon's or
+Washington's production feed and are retracted.
+
+**Washington is +2, not the +15 this table claimed until 2026-08-04.** Thirteen of those
+fifteen were the Mountain View collision: Idaho games written onto a Bellevue team because
+a roster lookup searched globally while importing a single state. I reported them up as
+"fifteen genuine cross-border games", and thirteen of them were corruption. The
+state-scoped lookup now creates `mountain_view_id`, the thirteen games land on it, and
+`check-geographic-coherence.js` holds it as a regression fixture at 13/13 same-state.
+**A number in this table that gets smaller on re-measurement is not always churn.**
 
 **Every pre-existing game is untouched**: comparing the 871 games present both before and
 after BY NATURAL KEY rather than by array position gives **zero field differences**.
@@ -472,6 +605,36 @@ that can be deployed independently, and every guard we had watched one half.
 **A phase exit may not push migration-coupled code until it has been run against prod's
 schema, not staging's.** "Rehearse at prod's `sql_mode`" was the specific case; this is
 the general one.
+
+### The vacuous-pass family — a standing ledger
+
+One shape keeps recurring, and it is not "the check was wrong". It is **a check that could
+not have failed**, which reads on the console exactly like a check that passed. Each member
+below was written in good faith, ran green, and certified nothing.
+
+| # | the check | why it could not fail | the cure |
+|---|---|---|---|
+| 1 | five WA smoke checks | asserted a key existed; `{"games": []}` satisfies that. They passed against a database with **no Washington data at all** | specs gained a 4th field — a minimum element count |
+| 2 | the LaxNumbers "control" | Oregon's control 403'd too, so it looked environmental. **Both arms used the same wrong client** (curl's headers, not axios's) — a control that shares the defect controls for nothing | vary only the variable under test |
+| 3 | the `claude install` PATH probe | a pipeline whose `\|\|` branch could never execute, so "no existing reference" was structurally guaranteed. Verified with `zsh -lc`, which never reads `.zshrc` | check the exit status you actually depend on |
+| 4 | `schedule/all?state=WA\|200\|season` | asserted a key called `season` existed and printed `2026`; **no number of games, including zero, could fail it** | real key, real floor: `\|200\|games\|500` |
+| 5 | `node … \| sed` in the rehearsal | a pipeline reports the **last** command's status, so `if ! node … \| sed` tested *sed*. The guard against vacuous checks was itself one, on the way in | capture the status directly, before any pipe |
+
+**Two more of the same shape, recorded here though they are not numbered members** — both
+found 2026-08-04, both about evidence that was *printed* rather than *asserted*:
+
+- The rehearsal grepped the API's `[db]` boot line and **carried on when the grep found
+  nothing**. Its absence was the visible signature of the stray-API inversion for four
+  runs. A boot line that is printed is not a check.
+- `scrape-state-rankings.js`'s own `PASS snapshot exists for state` passed while the API
+  served 404. A check inside the thing it checks can only report that the thing believes
+  itself.
+
+**The tell, in every case: ask what input would have made this red.** If no reachable input
+would, it is not a check — it is a line of output. And the cure is never a better assertion
+on the same evidence; it is a second, independent source for the same question. That is why
+`assert-rankings-persisted.js` is a separate process, and why the rehearsal now asks the API
+and the container the same thing and requires the same answer.
 
 ---
 
