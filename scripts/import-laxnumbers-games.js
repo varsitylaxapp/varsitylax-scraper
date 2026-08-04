@@ -29,7 +29,21 @@
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * ROSTER SOURCES ALWAYS RUN BEFORE OPPONENT-DERIVED CREATION. GLOBALLY, NOT PER UNIT
- * OF WORK.
+ * OF WORK — AND ROSTER MATCHING IS STATE-SCOPED.
+ *
+ * The second half was learned separately and painfully. Idaho's rated list contains
+ * "Mountain View". So does Oregon's, and so does Washington's — three different schools
+ * sharing a name. A GLOBAL name lookup during Idaho's roster phase found Washington's,
+ * decided Idaho's Mountain View already existed, and created nothing. Thirteen Idaho
+ * games — every one against Boise-area opposition — were then written onto a Bellevue
+ * team's season.
+ *
+ * Phase separation did not prevent it, because this is not an ordering problem: it is a
+ * NAME COLLISION ACROSS STATES, and no amount of running rosters first can help when the
+ * lookup itself ignores which state is being imported.
+ *
+ * So a rated team for state X matches only a team already in X, or a stateless
+ * placeholder. Never a team belonging to another state.
  *
  * This importer once ran roster-then-games PER STATE, which looks obviously fine and is
  * not. Idaho's GAMES ran before Nevada's ROSTER, so "Bishop Manogue" — a Reno school
@@ -161,6 +175,16 @@ async function ratingsRows(state) {
     }
     for (const a of aliases) { idx.set(norm(a.alias), a.team_id); looseIdx.set(loose(a.alias), a.team_id); }
     const byId = new Map(teams.map(t => [t.id, t]));
+    const teamState = new Map(teams.map(t => [t.id, t.state ?? null]));
+    const stateIdx = new Map(), stateLooseIdx = new Map();
+    for (const t of teams) {
+      if (!t.state) continue;
+      if (!stateIdx.has(t.state)) { stateIdx.set(t.state, new Map()); stateLooseIdx.set(t.state, new Map()); }
+      stateIdx.get(t.state).set(norm(t.name), t.id);
+      stateIdx.get(t.state).set(norm(t.slug), t.id);
+      stateLooseIdx.get(t.state).set(loose(t.name), t.id);
+      stateLooseIdx.get(t.state).set(loose(t.slug), t.id);
+    }
 
     const slugify = (name, suffix) =>
       norm(name).replace(/\s+/g, '_').slice(0, 56) + (suffix || '');
@@ -182,6 +206,12 @@ async function ratingsRows(state) {
       if (!COMMIT) {
         const id = fakeId--;
         idx.set(norm(name), id); looseIdx.set(loose(name), id);
+        teamState.set(id, stateCode ?? null);
+        if (stateCode) {
+          if (!stateIdx.has(stateCode)) { stateIdx.set(stateCode, new Map()); stateLooseIdx.set(stateCode, new Map()); }
+          stateIdx.get(stateCode).set(norm(name), id);
+          stateLooseIdx.get(stateCode).set(loose(name), id);
+        }
         return id;
       }
       const [r] = await c.execute(
@@ -193,6 +223,12 @@ async function ratingsRows(state) {
         `INSERT IGNORE INTO team_aliases (team_id, state, alias, source)
          VALUES (?,?,?, 'laxnumbers')`, [id, stateCode, name]);
       idx.set(norm(name), id); looseIdx.set(loose(name), id);
+      teamState.set(id, stateCode ?? null);
+      if (stateCode) {
+        if (!stateIdx.has(stateCode)) { stateIdx.set(stateCode, new Map()); stateLooseIdx.set(stateCode, new Map()); }
+        stateIdx.get(stateCode).set(norm(name), id);
+        stateLooseIdx.get(stateCode).set(loose(name), id);
+      }
       return id;
     }
 
@@ -216,7 +252,13 @@ async function ratingsRows(state) {
       ratings.set(code, rows);
       let created = 0;
       for (const t of rows) {
-        const have = idx.get(norm(t.name)) ?? looseIdx.get(loose(t.name)) ?? null;
+        // STATE-SCOPED. A global hit on another state's team is a COLLISION, not a match.
+        const candidate = idx.get(norm(t.name)) ?? looseIdx.get(loose(t.name)) ?? null;
+        const cs = candidate != null ? (teamState.get(candidate) ?? null) : undefined;
+        const have = candidate != null && (cs === code || cs === null) ? candidate : null;
+        if (candidate != null && !have) {
+          console.log(`      collision: "${t.name}" exists in ${cs} — creating a separate ${code} team`);
+        }
         if (have) continue;
         await createTeam(t.name, code, state.slugSuffix, 'rated in-state team');
         created++;
@@ -245,7 +287,14 @@ async function ratingsRows(state) {
           if (g.isForfeit) st.ff++;
           if (g.teamScore === null) { st.noResult++; continue; }   // nothing to import
 
-          let oppId = idx.get(norm(g.opponentRaw)) ?? looseIdx.get(loose(g.opponentRaw)) ?? null;
+          // SAME STATE FIRST. An opponent on state X's page is usually in X, and two
+          // states can share a school name — resolving globally is how Idaho's Mountain
+          // View became Washington's. A genuine cross-border opponent still resolves,
+          // via the fallback.
+          let oppId = stateIdx.get(code)?.get(norm(g.opponentRaw))
+                   ?? stateLooseIdx.get(code)?.get(loose(g.opponentRaw))
+                   ?? idx.get(norm(g.opponentRaw))
+                   ?? looseIdx.get(loose(g.opponentRaw)) ?? null;
 
           // PLACEHOLDER WITH PROVENANCE. An opponent outside our coverage still played a
           // real game against a team we are importing, and dropping it would hide a real

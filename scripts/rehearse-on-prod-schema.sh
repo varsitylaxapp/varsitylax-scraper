@@ -240,7 +240,13 @@ if [ "$WINDOW4" = "1" ]; then
   echo "      teams.state IS_NULLABLE → $NULLABLE"
   [ "$NULLABLE" = "YES" ] || die "section M did not take"
 
-  echo "   b. roster + games for the four states"
+  echo "   b. rankings backfill — the four states join the cron rotation"
+  for ST in AZ ID MT NV; do
+    node scripts/scrape-state-rankings.js $ST --commit 2>&1 \
+      | grep -E "ALL CHECKS PASSED|FAIL|delta:" | sed "s/^/     $ST /"
+  done
+
+  echo "   c. roster + games for the four states"
   node scripts/import-laxnumbers-games.js --state=AZ,ID,MT,NV --commit 2>&1 \
     | grep -E "roster —|imported|UNEXPLAINED|COMMITTED|ROLLED|UNRESOLVED" | sed 's/^/     /'
 fi

@@ -108,7 +108,7 @@ const STATES = {
   // id is advertised before the row exists. team_seasons.division_id has an FK,
   // so seeding must create the row first.
   AZ: {
-    code: 'AZ', name: 'Arizona', enabled: false, slugSuffix: '_az',
+    code: 'AZ', name: 'Arizona', enabled: true, slugSuffix: '_az',
     timeZone: 'America/Phoenix',        // no DST — Arizona does not observe it
     laxnumbersId: 3013,
     leagueName: 'Arizona Lacrosse League',   // single official league for AZ boys
@@ -118,7 +118,7 @@ const STATES = {
     scheduleSource: null, playoffs: null,
   },
   ID: {
-    code: 'ID', name: 'Idaho', enabled: false, slugSuffix: '_id',
+    code: 'ID', name: 'Idaho', enabled: true, slugSuffix: '_id',
     timeZone: 'America/Boise',
     laxnumbersId: 3146,
     // NULL deliberately. SWILA covers the Treasure Valley only; the LaxNumbers
@@ -133,7 +133,7 @@ const STATES = {
     scheduleSource: null, playoffs: null,
   },
   MT: {
-    code: 'MT', name: 'Montana', enabled: false, slugSuffix: '_mt',
+    code: 'MT', name: 'Montana', enabled: true, slugSuffix: '_mt',
     timeZone: 'America/Denver',
     laxnumbersId: 3300,
     leagueName: 'Montana High School Lacrosse League',
@@ -143,7 +143,7 @@ const STATES = {
     scheduleSource: null, playoffs: null,
   },
   NV: {
-    code: 'NV', name: 'Nevada', enabled: false, slugSuffix: '_nv',
+    code: 'NV', name: 'Nevada', enabled: true, slugSuffix: '_nv',
     timeZone: 'America/Los_Angeles',
     laxnumbersId: 3341,
     // NULL deliberately — the state splits between the High Sierra Lacrosse
