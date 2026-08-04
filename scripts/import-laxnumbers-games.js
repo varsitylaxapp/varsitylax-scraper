@@ -45,6 +45,36 @@
  * So a rated team for state X matches only a team already in X, or a stateless
  * placeholder. Never a team belonging to another state.
  *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * THE GENERAL RULE, of which both of the above are instances:
+ *
+ *     AN IDENTITY LOOKUP MUST BE EXACTLY AS NARROW AS THE THING BEING IMPORTED.
+ *
+ * A lookup wider than its subject silently merges two real entities, and NOTHING
+ * DOWNSTREAM CAN TELL. The count ladder still closes at UNEXPLAINED 0 — every row is
+ * accounted for. Source-conflict logging sees nothing — there is no conflict, one team
+ * simply absorbed another's season. The payload diff reports additions only. Every
+ * structural check passes, because structural checks verify that rows are EXPLAINED and
+ * this class of defect leaves them perfectly explained.
+ *
+ * Only TRUTH-ANCHORED checks catch it: geographic coherence, external records, a human
+ * reading a list. See scripts/check-geographic-coherence.js.
+ *
+ * Three members of the family so far, each one index too wide:
+ *
+ *   Brophy Prep / Brophy Prep II   two names, one school — a sweep would merge a JV
+ *                                  squad into varsity. Caught by a human ruling.
+ *   Bishop Manogue                 absorption by ORDERING — an opponent-derived
+ *                                  placeholder claimed a name before its own state's
+ *                                  roster ran. Caught by reading the placeholder list.
+ *   Mountain View                  COLLISION ACROSS STATES — a global lookup found
+ *                                  Washington's while importing Idaho's. Caught by a
+ *                                  human asking whether a Bellevue school really plays
+ *                                  thirteen games in Boise.
+ *
+ * All three were invisible to every automated check that existed when they happened.
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
  * This importer once ran roster-then-games PER STATE, which looks obviously fine and is
  * not. Idaho's GAMES ran before Nevada's ROSTER, so "Bishop Manogue" — a Reno school
  * Nevada rates — was first seen as an Idaho opponent and created as a STATELESS

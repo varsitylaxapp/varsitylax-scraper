@@ -248,7 +248,13 @@ if [ "$WINDOW4" = "1" ]; then
 
   echo "   c. roster + games for the four states"
   node scripts/import-laxnumbers-games.js --state=AZ,ID,MT,NV --commit 2>&1 \
-    | grep -E "roster —|imported|UNEXPLAINED|COMMITTED|ROLLED|UNRESOLVED" | sed 's/^/     /'
+    | grep -E "collision:|roster —|imported|UNEXPLAINED|COMMITTED|ROLLED|UNRESOLVED" | sed 's/^/     /'
+
+  echo "   d. geographic coherence — the truth-anchored check"
+  node scripts/check-geographic-coherence.js --states=AZ,ID,MT,NV 2>&1 \
+    | grep -E "eligible|scope:|FLAGGED|no team flagged|regression fixture|mountain_view_id" | sed 's/^/     /'
+  node scripts/check-geographic-coherence.js --states=AZ,ID,MT,NV >/dev/null 2>&1 \
+    || die "geographic coherence flagged a team — a season may be on the wrong school"
 fi
 
 # ── 7. HEAD's API, booted against this schema ────────────────────────────────
