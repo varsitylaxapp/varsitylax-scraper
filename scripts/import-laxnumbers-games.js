@@ -158,12 +158,24 @@ async function ratingsRows(state) {
       return id;
     }
 
+    // ══ PHASE 1, ALL STATES FIRST. Rosters before any games, without exception. ══
+    //
+    // Interleaving them is an ORDERING TRAP, and it bit: with roster-then-games per
+    // state, Idaho's GAMES ran before Nevada's ROSTER, so "Bishop Manogue" — a Reno
+    // school Nevada rates — was first seen as an Idaho opponent and became a stateless
+    // placeholder. Nevada's roster phase then found the name already indexed and skipped
+    // it, so the placeholder ABSORBED the identity: one row, no duplicate, and the wrong
+    // state. Eight teams landed that way, invisible to /teams?state=NV despite being
+    // Nevada teams.
+    //
+    // Every roster first means a placeholder can only ever be created for a name no
+    // state's rated list contains — which is what "unresolved" was supposed to mean.
+    const ratings = new Map();
     for (const code of STATES) {
       const state = getState(code);
       if (!state) throw new Error(`unknown state ${code}`);
       const rows = await ratingsRows(state);
-
-      // ── PHASE 1: the roster. In-state teams LaxNumbers rates that we lack. ──
+      ratings.set(code, rows);
       let created = 0;
       for (const t of rows) {
         const have = idx.get(norm(t.name)) ?? looseIdx.get(loose(t.name)) ?? null;
@@ -172,6 +184,12 @@ async function ratingsRows(state) {
         created++;
       }
       console.log(`  ${code}: roster — created ${created} team(s) from the rated list`);
+    }
+
+    // ══ PHASE 2: games, with every roster already in place. ══
+    for (const code of STATES) {
+      const state = getState(code);
+      const rows = ratings.get(code);
       const st = { teams: rows.length, gpTotal: 0, parsed: 0, resolved: 0, unresolved: 0,
                    matchedExisting: 0, wouldInsert: 0, ot: 0, ff: 0, noResult: 0,
                    placeholders: 0, gpFromSource: 0, mirrored: 0 };
