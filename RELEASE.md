@@ -248,8 +248,8 @@ no exceptions.
 
 ## Window #4-lite — AZ / ID / MT / NV game results
 
-**Status: REHEARSED ON A FRESH PROD DUMP 2026-08-04 — 32/32 endpoints healthy, zero
-coherence flags. Awaiting Spencer's window. Nothing applied to prod.**
+**Status: ✅ SHIPPED 2026-08-04. Applied to production, deploy live, 32/32 on the live
+host. Every pin matched exactly.**
 
 **These pins supersede everything measured before 2026-08-04 23:40.** Four earlier
 rehearsals reported 32/32 while their smoke was answered by a stray API serving staging —
@@ -278,8 +278,15 @@ the flips do not already cover.
 |---|---|---|
 | 1 | `teams.state` nullable | `section-m-nullable-team-state.sql` |
 | 2 | roster + games, four states | `import-laxnumbers-games.js --state=AZ,ID,MT,NV --stage-c --commit` |
-| 3 | rankings backfill ×4 — **after** step 2 | `scrape-state-rankings.js {AZ,ID,MT,NV} --commit` |
+| 3 | rankings backfill ×4 — **after** step 2 | `scrape-state-rankings.js {AZ,ID,MT,NV} --stage-c --commit` |
 | 4 | **persistence assertion — STOPS THE WINDOW** | `assert-rankings-persisted.js --season=2026 --states=AZ,ID,MT,NV` |
+
+**`--stage-c` is required on step 3 as well as step 2, and this runbook omitted it.** All
+four states refused with `FATAL: resolved target is "prod"` on the first attempt. Nothing
+was written and the guard did precisely its job — but the omission was invisible until the
+window was open, because the rehearsal runs at `target=REHEARSAL` and never takes that
+branch. Same shape as the prod-refusal guards that needed their own dry-run: **a guard the
+rehearsal cannot reach is a guard the runbook must name.**
 | 5 | `hasSchedules: false → true` ×4 | `src/config/states.js`, one line each |
 
 **Step 4 is not optional and does not run "if there's time".** It is the same script the
