@@ -35,6 +35,28 @@
  * PROVENANCE. `source = 'laxnumbers'`, already priority 50 in `game_source_priority`,
  * below WHSBLA (90) and OHSLA (100). Where a league export and a ratings site disagree
  * about a score, the league wins, and a cross-border game keeps its league row.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * THE ROSTER IS IMPORTED TOO, AND IT IS PROVISIONAL. Ruled 2026-08-03.
+ *
+ * For a rankings-only state, LaxNumbers IS the de facto authority — their rankings
+ * already come from it, so taking their roster from the same place is CONSISTENCY, not
+ * contamination. Our rosters for these states held 6/5/2/6 teams, created incidentally
+ * as cross-border opponents of Oregon and Washington games; LaxNumbers rates 17/31/6/15.
+ * Two thirds of the games were unimportable for want of teams, not aliases.
+ *
+ * These states stay NON-CURATED — no roster lock — precisely because this roster is
+ * best-available rather than league-blessed.
+ *
+ * SUCCESSION PLAN, for 2027-us: when SWILA / HSLL partnerships land, the LEAGUE roster
+ * supersedes this one and the curated-state sweep reconciles the two. That is the
+ * Washington pattern and it is already proven — WHSBLA's export replaced an incidental
+ * roster there without incident, because the importer matches on orientation-independent
+ * identity rather than on which source created a row.
+ *
+ * So: this roster was ALWAYS PROVISIONAL. Do not treat a laxnumbers-sourced team as
+ * settled identity, and do not be surprised when a league export renames half of them.
+ * ─────────────────────────────────────────────────────────────────────────────
  */
 const pool = require('../src/db');
 const { scrapeLaxNumbers, scrapeLaxNumbersTeamGames } = require('../src/scrapers/laxnumbers');
@@ -46,6 +68,20 @@ const STAGE_C = process.argv.includes('--stage-c');
 const SEASON  = 2026;
 const STATES  = process.argv.filter(a => a.startsWith('--state='))
   .flatMap(a => a.slice(8).split(',')).map(x => x.trim().toUpperCase()).filter(Boolean);
+
+/**
+ * NEGATIVE DECISIONS — merges that must never be proposed again.
+ *
+ * A name-similarity sweep will suggest each of these every time it runs, and each one is
+ * WRONG. Recorded here so the answer travels with the code rather than living in a memory
+ * of a conversation.
+ */
+const DO_NOT_MERGE = [
+  { keep: 'Brophy Prep II', never: 'brophy_az', why:
+    'A JV / second squad. Merging its games into the varsity team would corrupt the ' +
+    'varsity record — the same class of mistake as losing game_type, in team form. ' +
+    'The name similarity guarantees every future sweep proposes exactly this merge.' },
+];
 
 const norm  = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 const loose = s => norm(s).replace(/\b(high school|hs|school|academy|prep|the)\b/g, '').replace(/\s+/g, ' ').trim();
@@ -88,12 +124,57 @@ async function ratingsRows(state) {
     for (const a of aliases) { idx.set(norm(a.alias), a.team_id); looseIdx.set(loose(a.alias), a.team_id); }
     const byId = new Map(teams.map(t => [t.id, t]));
 
+    const slugify = (name, suffix) =>
+      norm(name).replace(/\s+/g, '_').slice(0, 56) + (suffix || '');
+
+    // Dry run SIMULATES creation — assigning a provisional id and indexing it — so the
+    // count ladder below reflects what a commit would actually do. Without this every
+    // opponent stays unresolved in dry run and the numbers describe nothing.
+    let fakeId = -1;
+
+    // EVERY GAME APPEARS ON BOTH TEAMS' PAGES. Without an in-run guard the importer sees
+    // each one twice: in COMMIT the second lookup finds the row just written, but in DRY
+    // RUN nothing is written, so the prediction came out ~2x the truth — which is exactly
+    // the number a production window would have been planned against.
+    const seenThisRun = new Set();
+
+    /** Create a team we do not have. Provenance always; never silently. */
+    async function createTeam(name, stateCode, suffix, why) {
+      const slug = slugify(name, suffix);
+      if (!COMMIT) {
+        const id = fakeId--;
+        idx.set(norm(name), id); looseIdx.set(loose(name), id);
+        return id;
+      }
+      const [r] = await c.execute(
+        `INSERT INTO teams (slug, name, state) VALUES (?,?,?)
+         ON DUPLICATE KEY UPDATE name = VALUES(name), id = LAST_INSERT_ID(id)`,
+        [slug, name, stateCode]);
+      const id = r.insertId;
+      await c.execute(
+        `INSERT IGNORE INTO team_aliases (team_id, state, alias, source)
+         VALUES (?,?,?, 'laxnumbers')`, [id, stateCode, name]);
+      idx.set(norm(name), id); looseIdx.set(loose(name), id);
+      return id;
+    }
+
     for (const code of STATES) {
       const state = getState(code);
       if (!state) throw new Error(`unknown state ${code}`);
       const rows = await ratingsRows(state);
+
+      // ── PHASE 1: the roster. In-state teams LaxNumbers rates that we lack. ──
+      let created = 0;
+      for (const t of rows) {
+        const have = idx.get(norm(t.name)) ?? looseIdx.get(loose(t.name)) ?? null;
+        if (have) continue;
+        await createTeam(t.name, code, state.slugSuffix, 'rated in-state team');
+        created++;
+      }
+      console.log(`  ${code}: roster — created ${created} team(s) from the rated list`);
       const st = { teams: rows.length, gpTotal: 0, parsed: 0, resolved: 0, unresolved: 0,
-                   matchedExisting: 0, wouldInsert: 0, ot: 0, ff: 0, noResult: 0 };
+                   matchedExisting: 0, wouldInsert: 0, ot: 0, ff: 0, noResult: 0,
+                   placeholders: 0, gpFromSource: 0, mirrored: 0 };
 
       for (const t of rows) {
         st.gpTotal += t.gp || 0;
@@ -108,7 +189,19 @@ async function ratingsRows(state) {
           if (g.isForfeit) st.ff++;
           if (g.teamScore === null) { st.noResult++; continue; }   // nothing to import
 
-          const oppId = idx.get(norm(g.opponentRaw)) ?? looseIdx.get(loose(g.opponentRaw)) ?? null;
+          let oppId = idx.get(norm(g.opponentRaw)) ?? looseIdx.get(loose(g.opponentRaw)) ?? null;
+
+          // PLACEHOLDER WITH PROVENANCE. An opponent outside our coverage still played a
+          // real game against a team we are importing, and dropping it would hide a real
+          // result from the season we are importing to show. It becomes a team with NO
+          // STATE — LaxNumbers publishes no state for an opponent string, and inventing
+          // one would be the guess this rule exists to forbid. A stateless team renders
+          // as a plain opponent name with no out-of-state tag, which is honest: we know
+          // who they played, not where they are from.
+          if (selfId && !oppId) {
+            oppId = await createTeam(g.opponentRaw, null, null, 'unresolved opponent');
+            st.placeholders++;
+          }
           if (!selfId || !oppId) {
             st.unresolved++;
             const raw = !selfId ? t.name : g.opponentRaw;
@@ -123,7 +216,11 @@ async function ratingsRows(state) {
 
           const [homeId, awayId] = g.isHome ? [selfId, oppId] : [oppId, selfId];
           const lo = Math.min(homeId, awayId), hi = Math.max(homeId, awayId);
-          const [[existing]] = await c.execute(
+          const runKey = `${g.date}|${lo}|${hi}`;
+          if (seenThisRun.has(runKey)) { st.mirrored++; continue; }
+          seenThisRun.add(runKey);
+
+          const [[existing]] = (homeId < 0 || awayId < 0) ? [[null]] : await c.execute(
             `SELECT id, canonical_source FROM games
               WHERE season = ? AND game_date = ?
                 AND LEAST(home_team_id, away_team_id) = ?
@@ -155,6 +252,35 @@ async function ratingsRows(state) {
       console.log(`      resolved ${st.resolved}  unresolved ${st.unresolved}  ` +
                   `matched-existing ${st.matchedExisting}  would-insert ${st.wouldInsert}`);
       console.log(`      OT ${st.ot}  forfeits ${st.ff}  no-result ${st.noResult}`);
+    }
+
+    // ── THE COUNT LADDER, fourth edition ──────────────────────────────────────
+    // Every parsed row is accounted for. A row that is neither imported nor explained
+    // is the thing this exists to catch — three previous count ladders each found one.
+    console.log('\n  ── COUNT LADDER — every parsed row accounted for ──');
+    for (const [code, st] of Object.entries(report.perState)) {
+      const explained = st.noResult + st.mirrored + st.matchedExisting + st.wouldInsert + st.unresolved;
+      const gap = st.parsed - explained;
+      console.log(`\n    ${code}`);
+      console.log(`      source gp total (ratings service) ${String(st.gpTotal).padStart(5)}`);
+      console.log(`      rows parsed from team pages       ${String(st.parsed).padStart(5)}`);
+      console.log(`        - no result ("-")               ${String(st.noResult).padStart(5)}`);
+      console.log(`        - the SAME game from the other   ${String(st.mirrored).padStart(5)}   (every game appears on both pages)`);
+      console.log(`          team's page`);
+      console.log(`        - matched an existing row       ${String(st.matchedExisting).padStart(5)}   (cross-border, NOT duplicated)`);
+      console.log(`        - unresolved, skipped           ${String(st.unresolved).padStart(5)}`);
+      console.log(`        = imported                      ${String(st.wouldInsert).padStart(5)}`);
+      console.log(`      UNEXPLAINED                       ${String(gap).padStart(5)}   ${gap === 0 ? 'ok' : '*** INVESTIGATE ***'}`);
+      // parsed-vs-gp: each game appears on BOTH teams' pages, so both double-count.
+      console.log(`      distinct games seen               ${String(st.mirrored + st.matchedExisting + st.wouldInsert).padStart(5)}`);
+      const delta = st.parsed - st.gpTotal;
+      console.log(`      parsed − gp                       ${String(delta).padStart(5)}   ` +
+                  `(no-result ${st.noResult}, forfeits ${st.ff})`);
+      if (delta !== 0) {
+        const hyp = st.noResult + st.ff;
+        console.log(`        hypothesis: no-result + forfeits = ${hyp} ` +
+                    `${hyp === delta ? '→ MATCHES the delta' : '→ does NOT match; still open'}`);
+      }
     }
 
     // ── the long tail, for rulings ──
