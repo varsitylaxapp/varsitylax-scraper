@@ -165,3 +165,27 @@ immediately.
 request is unavoidable, copy axios's default headers rather than the two the code names
 explicitly. Cloudflare's posture also drifts over time, so a result from either client is
 worth re-checking rather than remembering.
+
+---
+
+## LaxNumbers `gp` is not the number of rows on the team page
+
+The ratings service reports `gp` (games played) per team. A team's `/team_info.php` page
+lists more rows than that, and the difference is not noise — it is two exclusions plus one
+exception:
+
+- **Forfeits are not counted in `gp`.** A `"N - N (F)"` row appears on the page and not in
+  the total.
+- **No-result rows are not counted** — a `"-"` in the score cell, meaning scheduled,
+  cancelled or never played.
+- **Except once.** Idaho 2026 has 11 no-result rows and a page-minus-`gp` delta of 12,
+  which resolves per-team as ten teams with one no-result row each, Sun Valley with two,
+  and Kuna and Emmett with a forfeit — 10 + 2 = 12. So one of the eleven no-result rows
+  IS counted in `gp`. The exclusions are the rule, not an invariant.
+
+**Do not use `gp` as a completeness check without accounting for both.** Aggregate
+arithmetic gets close and then disagrees by one, which reads like a parser bug and is not.
+Reconcile PER TEAM — that is what turned "13 ≠ 12, still open" into a closed question.
+
+Arizona and Montana happen to have neither exclusion in 2026, so their totals match
+exactly. That agreement is a coincidence of the data, not a property of the source.

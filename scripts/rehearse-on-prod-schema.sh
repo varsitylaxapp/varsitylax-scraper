@@ -19,6 +19,7 @@
 #   ./scripts/rehearse-on-prod-schema.sh                 # baseline: prod schema as-is
 #   ./scripts/rehearse-on-prod-schema.sh --window2       # + window #2's migrations
 #   ./scripts/rehearse-on-prod-schema.sh --window3       # + stage (c): Washington
+#   ./scripts/rehearse-on-prod-schema.sh --window4       # + AZ/ID/MT/NV, INCLUDING DDL
 #
 # A FRESH DUMP EVERY RUN. A cached dump answers "did HEAD work against prod as it was
 # whenever someone last looked", which is the question that produced the outage.
@@ -33,6 +34,8 @@ WINDOW2=0
 WINDOW3=0
 [[ " $* " == *" --window2 "* ]] && WINDOW2=1
 [[ " $* " == *" --window3 "* ]] && WINDOW3=1
+WINDOW4=0
+[[ " $* " == *" --window4 "* ]] && WINDOW4=1
 
 # Window-3 expectations. Left blank on the FIRST rehearsal so the run PINS them; set
 # from that run's output thereafter, so later runs assert rather than observe.
@@ -219,6 +222,27 @@ if [ "$WINDOW3" = "1" ]; then
     fi
   done
   [ "$GUARD_FAIL" -eq 0 ] || { echo "   → $GUARD_FAIL script(s) would refuse the window"; SMOKE=1; }
+fi
+
+if [ "$WINDOW4" = "1" ]; then
+  export DB_TARGET=rehearsal
+  export REHEARSAL_DATABASE_URL="mysql://root:$ROOTPW@127.0.0.1:$PORT/$DBN"
+
+  say "5. window #4-lite — AZ/ID/MT/NV"
+  # THE DDL RUNS HERE, at prod's sql_mode, not just the data. Section M is a MODIFY
+  # COLUMN on a CHAR(2) NOT NULL, and a column-modifying statement is exactly the class
+  # that behaves differently under a different mode — the reason this gate exists.
+  echo "   a. section-m — teams.state becomes nullable (DDL, at prod sql_mode)"
+  docker exec -i "$CONTAINER" mysql -uroot -p"$ROOTPW" "$DBN" < migrations/section-m-nullable-team-state.sql \
+    || die "section M failed"
+  NULLABLE=$(mysh -N -e "SELECT IS_NULLABLE FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA='$DBN' AND TABLE_NAME='teams' AND COLUMN_NAME='state'")
+  echo "      teams.state IS_NULLABLE → $NULLABLE"
+  [ "$NULLABLE" = "YES" ] || die "section M did not take"
+
+  echo "   b. roster + games for the four states"
+  node scripts/import-laxnumbers-games.js --state=AZ,ID,MT,NV --commit 2>&1 \
+    | grep -E "roster —|imported|UNEXPLAINED|COMMITTED|ROLLED|UNRESOLVED" | sed 's/^/     /'
 fi
 
 # ── 7. HEAD's API, booted against this schema ────────────────────────────────

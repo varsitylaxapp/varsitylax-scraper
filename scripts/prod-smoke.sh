@@ -71,6 +71,14 @@ CHECKS=(
   "/api/v2/playoff-formats?season=$SEASON&state=WA|200|brackets|4"
   "/api/v2/schedule/team/mount_si_wa?season=$SEASON|200|games|15"
   "/api/v2/teams?season=2027&state=WA|200|teams|70"
+  # ── AZ / ID / MT / NV. FAIL until window #4-lite lands, deliberately — same role
+  # the WA checks played before stage (c). Minimums pinned on staging 2026-08-03.
+  #   before window #4:  SMOKE_SKIP=... or expect these four to fail
+  "/api/v2/schedule/all?season=$SEASON&state=AZ|200|games|110"
+  "/api/v2/schedule/all?season=$SEASON&state=ID|200|games|200"
+  "/api/v2/schedule/all?season=$SEASON&state=MT|200|games|25"
+  "/api/v2/schedule/all?season=$SEASON&state=NV|200|games|110"
+  "/api/v2/teams?season=$SEASON&state=ID|200|teams|28"
   "/api/rankings/laxnumbers?season=$SEASON|200|rankings"
   "/api/schedule/all?season=$SEASON|200|games"
   "/api/schedule/playoffs|200|games"

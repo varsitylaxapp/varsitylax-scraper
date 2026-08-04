@@ -25,8 +25,55 @@ const VOLATILE = new Set(['updated', 'lastScrape', 'lastGameWrite', 'lastSnapsho
 
 const added = [], removed = [], changed = [], reordered = [];
 
+/**
+ * An element's stable identity, or null if it has none.
+ *
+ * Deliberately narrow: a game by its NATURAL KEY (calendar day plus the unordered team
+ * pair — the same identity the API itself uses for `advancesTo`, and never the numeric
+ * id, which is environment-local), a team by slug, a ranking by slug, a bracket by key.
+ * Anything else falls back to positional comparison rather than guessing an identity.
+ */
+function elementKey(el) {
+  if (!el || typeof el !== 'object' || Array.isArray(el)) return null;
+  if (el.home && el.away && (el.dateKey || el.date)) {
+    const day = String(el.dateKey || el.date).slice(0, 10);
+    const pair = [el.home.slug, el.away.slug].sort().join('~');
+    return `${day}~${pair}`;
+  }
+  if (el.slug) return String(el.slug);
+  if (el.key) return String(el.key);
+  if (el.code) return String(el.code);
+  return null;
+}
+
 function walk(a, b, p) {
   if (Array.isArray(a) && Array.isArray(b)) {
+    // ── KEY-BASED WHERE THE ELEMENTS HAVE AN IDENTITY ──────────────────────
+    //
+    // Positional comparison cannot tell "a row was inserted" from "every row changed".
+    // On 2026-08-03 this tool reported 7747 CHANGED for an import that inserted 17 games
+    // and altered none — values flipping BOTH directions in near-equal counts
+    // (`isConference: true -> false` x114 alongside `false -> true` x114), which is the
+    // signature of a date-sorted array shifting under an insert. The real answer, found
+    // by comparing the same payloads BY NATURAL KEY, was 17 added and ZERO field
+    // differences across the 871 games present in both.
+    //
+    // That failure mode is not merely noisy: an inserted row makes every later row look
+    // changed, so a genuine change hides inside thousands of false ones. The tool that
+    // guards the additive policy must not be the tool that buries a violation.
+    //
+    // So: elements that carry an identity are matched by it, and only elements with the
+    // SAME identity are compared field by field. Anything without an identity keeps the
+    // positional behaviour, which is correct for a fixed-shape list.
+    const ka = a.map(elementKey), kb = b.map(elementKey);
+    if (ka.every(Boolean) && kb.every(Boolean) && new Set(ka).size === ka.length) {
+      const bi = new Map(b.map((el, i) => [kb[i], el]));
+      const ai = new Map(a.map((el, i) => [ka[i], el]));
+      for (const k of kb) if (!ai.has(k)) added.push(`${p}[] +1 element (key ${k})`);
+      for (const k of ka) if (!bi.has(k)) removed.push(`${p}[] -1 element (key ${k})`);
+      for (const k of ka) if (bi.has(k)) walk(ai.get(k), bi.get(k), `${p}[${k}]`);
+      return;
+    }
     if (a.length !== b.length) changed.push(`${p}: array length ${a.length} -> ${b.length}`);
     for (let i = 0; i < Math.min(a.length, b.length); i++) walk(a[i], b[i], `${p}[${i}]`);
     return;
