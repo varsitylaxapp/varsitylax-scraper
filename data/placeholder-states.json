@@ -1,0 +1,41 @@
+{
+  "_about": {
+    "purpose": "Human rulings on the ORIGIN of placeholder teams — opponents that appear in a non-curated import with no state attached. LaxNumbers publishes an opponent as a bare name; nothing on the page says where they are from, and the national feed (v=0) is empty. So origin is RULED, never inferred.",
+    "pattern": "Follows data/whsbla-2026/alias-decisions.json — a human decision, the evidence for it, and the class of that evidence.",
+    "approver": "Spencer, via review, 2026-08-04",
+    "evidenceClasses": {
+      "name": "Establishable from the string itself — the name contains a place.",
+      "known-program": "A well-known school whose location is settled public knowledge. NOT inferred from who it played; a schedule tells you nothing about where a team is from."
+    },
+    "rule": "An entry here sets a placeholder's state. A name ABSENT from this file stays NULL and renders untagged, which is the honest outcome and not a gap to be filled by guessing.",
+    "notForRoster": "An entry with \"kind\": \"club\" is NOT a school. No roster process may ever promote it into a state's team list."
+  },
+
+  "placeholders": [
+    { "name": "Mater Dei Santa Ana",      "state": "CA", "evidence": "name",          "note": "Santa Ana is in the name." },
+    { "name": "Jesuit Sacramento",        "state": "CA", "evidence": "name",          "note": "Sacramento is in the name." },
+    { "name": "St Francis-La Canada",     "state": "CA", "evidence": "name",          "note": "La Cañada is in the name." },
+    { "name": "Torrey Pines",             "state": "CA", "evidence": "known-program", "note": "San Diego." },
+    { "name": "La Costa Canyon",          "state": "CA", "evidence": "known-program", "note": "Carlsbad." },
+    { "name": "Mira Costa",               "state": "CA", "evidence": "known-program", "note": "Manhattan Beach." },
+    { "name": "Santa Margarita Catholic", "state": "CA", "evidence": "known-program", "note": "Rancho Santa Margarita." },
+    { "name": "Cathedral Catholic",       "state": "CA", "evidence": "known-program", "note": "San Diego." },
+    { "name": "Sierra Canyon",            "state": "CA", "evidence": "known-program", "note": "Chatsworth." },
+    { "name": "Simi Valley",              "state": "CA", "evidence": "known-program", "note": "Simi Valley." },
+    { "name": "St Margarets Episcopal",   "state": "CA", "evidence": "known-program", "note": "San Juan Capistrano." },
+
+    { "name": "Granite Hills",            "state": "CA", "evidence": "known-program",
+      "note": "THE STATE IS SETTLED, THE CAMPUS IS NOT. Both plausible same-name candidates are in California, so CA is safe while the specific school remains open. Do not resolve this to a campus without new evidence." },
+
+    { "name": "Dallas Jesuit",            "state": "TX", "evidence": "name",          "note": "Dallas is in the name." },
+    { "name": "New Trier",                "state": "IL", "evidence": "known-program", "note": "Winnetka." },
+    { "name": "Lehi",                     "state": "UT", "evidence": "known-program", "note": "Lehi." },
+
+    { "name": "Duke City LC",             "state": "NM", "evidence": "name", "kind": "club",
+      "note": "\"Duke City\" is Albuquerque's nickname, which is what establishes the state. NOT A SCHOOL — a club side. Its single game against an Arizona team is real and is KEPT: deleting it would falsify that team's season. It must appear only as a tagged opponent string and must never be promoted into a roster." }
+  ],
+
+  "untagged": [
+    { "name": "St Marks", "reason": "Multiple same-name schools in different states are plausible opponents here. Stays NULL, honestly. Untagged is a correct answer, not an unfinished one." }
+  ]
+}

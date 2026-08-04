@@ -27,6 +27,31 @@
  * of the time is how a kid ends up on the wrong roster.
  * ─────────────────────────────────────────────────────────────────────────────
  *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * ROSTER SOURCES ALWAYS RUN BEFORE OPPONENT-DERIVED CREATION. GLOBALLY, NOT PER UNIT
+ * OF WORK.
+ *
+ * This importer once ran roster-then-games PER STATE, which looks obviously fine and is
+ * not. Idaho's GAMES ran before Nevada's ROSTER, so "Bishop Manogue" — a Reno school
+ * Nevada rates — was first seen as an Idaho opponent and created as a STATELESS
+ * PLACEHOLDER. Nevada's roster phase then found the name already indexed, judged it
+ * present, and skipped it.
+ *
+ * The placeholder ABSORBED THE IDENTITY. Eight of Nevada's, Montana's and Arizona's own
+ * rated teams ended up carrying state = NULL, invisible to /teams?state=NV while being
+ * Nevada's teams.
+ *
+ * WHY IT IS DANGEROUS: identity absorption is SILENT BY CONSTRUCTION. There is no
+ * duplicate row, no constraint violation, no error, and no count anomaly — the count
+ * ladder still closed at UNEXPLAINED 0, because every ROW was accounted for. The ladder
+ * proves rows are explained; it cannot prove a team got the right STATE. The defect
+ * surfaced only because a human asked to see the placeholder list and read it.
+ *
+ * So the rule is structural rather than careful: every roster source is exhausted before
+ * anything creates a team from an opponent string. Exhibit: Bishop Manogue, stateless,
+ * while being Nevada's own rated team.
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
  * DEDUP. These states already appear in Oregon's and Washington's feeds as cross-border
  * opponents. Those rows must MATCH, not duplicate. The existing orientation-independent
  * key does that — window #3 proved it, importing 502 Washington games and adding zero
@@ -62,6 +87,22 @@ const pool = require('../src/db');
 const { scrapeLaxNumbers, scrapeLaxNumbersTeamGames } = require('../src/scrapers/laxnumbers');
 const { getState } = require('../src/config/states');
 const axios = require('axios');
+const fs = require('fs');
+const norm  = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+const loose = s => norm(s).replace(/\b(high school|hs|school|academy|prep|the)\b/g, '').replace(/\s+/g, ' ').trim();
+const path = require('path');
+
+/**
+ * Human rulings on placeholder origin. A name absent from the file stays NULL and renders
+ * untagged — the honest outcome, not a gap for the importer to fill.
+ */
+const RULINGS = (() => {
+  const f = path.join(__dirname, '..', 'data', 'placeholder-states.json');
+  const d = JSON.parse(fs.readFileSync(f, 'utf8'));
+  const m = new Map();
+  for (const p of d.placeholders) m.set(norm(p.name), p);
+  return m;
+})();
 
 const COMMIT  = process.argv.includes('--commit');
 const STAGE_C = process.argv.includes('--stage-c');
@@ -82,9 +123,6 @@ const DO_NOT_MERGE = [
     'varsity record — the same class of mistake as losing game_type, in team form. ' +
     'The name similarity guarantees every future sweep proposes exactly this merge.' },
 ];
-
-const norm  = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-const loose = s => norm(s).replace(/\b(high school|hs|school|academy|prep|the)\b/g, '').replace(/\s+/g, ' ').trim();
 
 async function ratingsRows(state) {
   const v = state.laxnumbersId;
@@ -192,7 +230,7 @@ async function ratingsRows(state) {
       const rows = ratings.get(code);
       const st = { teams: rows.length, gpTotal: 0, parsed: 0, resolved: 0, unresolved: 0,
                    matchedExisting: 0, wouldInsert: 0, ot: 0, ff: 0, noResult: 0,
-                   placeholders: 0, gpFromSource: 0, mirrored: 0 };
+                   placeholders: 0, gpFromSource: 0, mirrored: 0, ruled: 0, untagged: 0 };
 
       for (const t of rows) {
         st.gpTotal += t.gp || 0;
@@ -217,8 +255,12 @@ async function ratingsRows(state) {
           // as a plain opponent name with no out-of-state tag, which is honest: we know
           // who they played, not where they are from.
           if (selfId && !oppId) {
-            oppId = await createTeam(g.opponentRaw, null, null, 'unresolved opponent');
+            // A RULED origin, or NULL. Never a guess — see data/placeholder-states.json.
+            const ruling = RULINGS.get(norm(g.opponentRaw)) || null;
+            oppId = await createTeam(g.opponentRaw, ruling ? ruling.state : null, null,
+                                     'unresolved opponent');
             st.placeholders++;
+            if (ruling) st.ruled++; else st.untagged++;
           }
           if (!selfId || !oppId) {
             st.unresolved++;
