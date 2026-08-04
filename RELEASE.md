@@ -613,6 +613,27 @@ that can be deployed independently, and every guard we had watched one half.
 schema, not staging's.** "Rehearse at prod's `sql_mode`" was the specific case; this is
 the general one.
 
+### Rollback anchors — when a dump must be retained
+
+Written after window #4-lite shipped without one. The window contained DDL
+(`section-m`), the standard says take a dump, and the standard was skipped on a judgement
+call that turned out fine. **"Fine" was luck plus judgement, not policy**, and the next
+person making that call will have less context and the same confidence.
+
+**Clause 1 — any window containing DDL retains its anchor dump. No exceptions.** Not
+"usually", not "unless the change is obviously additive". A schema change can interact with
+data in ways the change itself does not reveal, and the moment you need the anchor is the
+moment you can no longer reason calmly about whether you needed it. A rehearsal dump does
+not count: the rehearsal tears itself down, so nothing survives to roll back to.
+
+**Clause 2 — a purely-additive DATA window may skip the retained dump**, if and only if the
+rollback is data-scoped, documented before the window opens, and **the skip is recorded in
+the window report**. The recording is the load-bearing part: an undocumented skip is
+indistinguishable from an oversight, including to the person who made it.
+
+Window #4-lite would have needed a dump under clause 1, because section-M rode along with
+it. Recorded here rather than quietly corrected.
+
 ### The vacuous-pass family — a standing ledger
 
 One shape keeps recurring, and it is not "the check was wrong". It is **a check that could
@@ -626,6 +647,7 @@ below was written in good faith, ran green, and certified nothing.
 | 3 | the `claude install` PATH probe | a pipeline whose `\|\|` branch could never execute, so "no existing reference" was structurally guaranteed. Verified with `zsh -lc`, which never reads `.zshrc` | check the exit status you actually depend on |
 | 4 | `schedule/all?state=WA\|200\|season` | asserted a key called `season` existed and printed `2026`; **no number of games, including zero, could fail it** | real key, real floor: `\|200\|games\|500` |
 | 5 | `node … \| sed` in the rehearsal | a pipeline reports the **last** command's status, so `if ! node … \| sed` tested *sed*. The guard against vacuous checks was itself one, on the way in | capture the status directly, before any pipe |
+| 6 | `playoff-formats?state=AZ\|200\|season` | keyed on `season`, printed `2026`. Arizona having **no brackets today (correct)** and **no brackets after a regression (broken)** were indistinguishable to it | expectations are now MANDATORY and can be exact: `\|brackets\|=0` |
 
 **Two more of the same shape, recorded here though they are not numbered members** — both
 found 2026-08-04, both about evidence that was *printed* rather than *asserted*:
