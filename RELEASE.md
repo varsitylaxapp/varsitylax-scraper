@@ -246,6 +246,106 @@ no exceptions.
 
 ---
 
+## Window #4-lite — AZ / ID / MT / NV game results
+
+**Status: STAGING-VERIFIED 2026-08-03. Awaiting Spencer's window. Nothing applied to prod.**
+
+Ships the 2026 season for the four rankings-only states, so 2.0's story becomes
+"six states, full seasons" rather than "six states, four of them a ranked list".
+
+### ⚠️ It is NOT purely data — one schema statement comes with it
+
+`section-m-nullable-team-state.sql`: `teams.state` becomes nullable. Required, not
+incidental — LaxNumbers publishes no state for an opponent string, and the alternatives
+(a sentinel, an empty string, or 18 guesses) were each rejected on inspection; the
+migration file records why. No existing row changes; the client already types `state` as
+optional everywhere.
+
+So the rollback is *four one-line capability flips plus a data delete*, and the schema
+statement stays — it is harmless on its own and reverting it would break nothing that
+the flips do not already cover.
+
+### What ships
+
+| # | step | script |
+|---|---|---|
+| 1 | `teams.state` nullable | `section-m-nullable-team-state.sql` |
+| 2 | roster + games, four states | `import-laxnumbers-games.js --state=AZ,ID,MT,NV --stage-c --commit` |
+| 3 | `hasSchedules: false → true` ×4 | `src/config/states.js`, one line each |
+
+Step 2 imports the ROSTER as well as the games: our rosters were 6/5/2/6, created
+incidentally as cross-border opponents, against 17/31/6/15 rated. Two thirds of the games
+were unimportable for want of teams. For a rankings-only state LaxNumbers is the de facto
+authority — the rankings already come from it — and the roster is explicitly PROVISIONAL,
+superseded by a league export when SWILA/HSLL land. The importer header carries the
+succession plan.
+
+### Expected diff — PINNED ON STAGING, not computed
+
+| | before | after |
+|---|---|---|
+| AZ teams / games in feed | 6 / — | **17 / 122** |
+| ID teams / games in feed | 5 / — | **31 / 219** |
+| MT teams / games in feed | 2 / — | **3 / 29** |
+| NV teams / games in feed | 6 / — | **12 / 122** |
+| `laxnumbers`-sourced games | 0 | **475** |
+| teams with `state IS NULL` | 0 | **25** |
+
+475 = 117 AZ + 211 ID + 36 MT + 111 NV, and the count ladder closes at **UNEXPLAINED 0**
+for every state.
+
+#### ⚠️ OREGON AND WASHINGTON ARE NOT BYTE-STABLE — and the change is correct
+
+The step-3 brief expected them to be. They are not, and the difference is real data
+rather than churn:
+
+| feed | before | after | added |
+|---|---|---|---|
+| Oregon `schedule/all` | 345 | **347** | +2 |
+| Washington `schedule/all` | 526 | **541** | +15 |
+
+All 17 are genuine cross-border games our curated sources never had — Bend/Caldera vs
+Borah/Capital, Mountain View (WA) vs three Idaho schools, and so on. Nothing was removed.
+
+**Every pre-existing game is untouched**: comparing the 871 games present both before and
+after BY NATURAL KEY rather than by array position gives **zero field differences**.
+Rankings 41→41, teams 41/76 unchanged, playoffs 38/43 unchanged.
+
+This makes Oregon's Scores feed the FOURTH deliberate Oregon-visible change, and it wants
+a line in the release notes: two games appear that were always played and never listed.
+
+#### Note on `payload-diff.js`, which reported this badly
+
+It flagged **7747 CHANGED** — values flipping in both directions in near-equal counts
+(`true→false ×114` alongside `false→true ×114`). That is positional drift: the tool
+compares `games[]` index by index, so inserting rows into a date-sorted array shifts
+everything after them. It is not wrong, but it cannot distinguish "inserted a row" from
+"changed every row", and on this release it said the second when the first was true.
+Verification had to fall back to a key-based comparison. Worth fixing before a release
+where the distinction is less obvious.
+
+### Sequence
+
+```
+ 1. Fresh prod dump, verified restorable                   [rollback anchor]
+ 2. Capture prod baseline
+ 3. Apply section-m
+ 4. import-laxnumbers-games.js --state=AZ,ID,MT,NV --stage-c --commit
+ 5. Flip hasSchedules for the four states; git push (deploys)
+ 6. ./scripts/prod-smoke.sh — extended with minimum-count checks for all four
+ 7. Expected-diff assertions above, against live prod
+ 8. NO cron-cycle watch needed: these are one-off imports and the scraper registry is
+    unchanged. The 2-hourly cycle keeps doing exactly what it did before.
+```
+
+### Rollback
+
+Four independent one-line flips (`hasSchedules: true → false`), each hiding one state
+without touching the others. Data: `DELETE FROM games WHERE canonical_source='laxnumbers'`
+plus the roster rows the importer prints. Schema stays.
+
+---
+
 ## 🚨 Emergency partial-J — 2026-07-30, outage remediation
 
 **Applied to production outside a scheduled window, on Spencer's explicit authorisation.**

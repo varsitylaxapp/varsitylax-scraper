@@ -1,0 +1,33 @@
+-- Section M — a team's state may be UNKNOWN
+--
+-- `teams.state` was CHAR(2) NOT NULL, which forced every team to claim an origin. That
+-- held while every source was curated: OHSLA and WHSBLA both name the state of a
+-- cross-border opponent, which is why the table already carries TX, CA, BC, TN, RI, NY
+-- and FL rows quite correctly.
+--
+-- LaxNumbers does not. An opponent is a bare name on a team's page — "Torrey Pines",
+-- "Dallas Jesuit" — with no state anywhere on the page, and the national ratings feed
+-- (v=0) returns nothing to look it up in. So importing those games requires representing
+-- a team whose ORIGIN IS GENUINELY UNKNOWN.
+--
+-- The alternatives were worse, and both were rejected on inspection:
+--
+--   a sentinel ('XX')  `OutOfStateTag` renders the team's state code AS the tag label,
+--                      so every such opponent would read "Torrey Pines (XX)". A wrong
+--                      label is worse than no label.
+--   empty string       the exact shape of the window #1 incident, where prod silently
+--                      wrote state = '' and the rows became invisible to every read
+--                      because they all filter `AND state = ?`. Never again.
+--   guessing           18 hardcoded guesses is precisely what the non-curated-source
+--                      rule forbids.
+--
+-- NULL says the true thing: we know who they played, not where they are from. The client
+-- already models it — `state` is optional on every Swift type that carries it, and
+-- `OutOfStateTag` is documented to render nothing rather than guess when it is nil.
+--
+-- No existing row changes. Nothing that reads `state = ?` matches NULL, so a
+-- state-unknown team is unreachable from every state-parameterized surface — which is
+-- exactly right for a school we do not cover and will never list.
+
+ALTER TABLE teams
+  MODIFY COLUMN state CHAR(2) NULL;
