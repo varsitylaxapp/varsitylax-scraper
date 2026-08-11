@@ -71,11 +71,29 @@ const SEASON = 2026;
             AND GREATEST(g.home_team_id,g.away_team_id) = ?`,
         [SEASON, p.d, p.a, p.b]);
 
-      const keep = rows.find(r => r.src === KEEP_SOURCE);
-      const drop = rows.filter(r => r.src === DROP_SOURCE);
+      // KEEPER BY PRIORITY, NOT BY NAME.
+      //
+      // This script was written for the WA case and hardcoded "one ohsla + one whsbla".
+      // Window #5 fed it an ohsla/laxnumbers pair — the mirrored Borah fixtures exposed
+      // by the borah_id merge — and it threw and rolled back. Refusing was the right
+      // behaviour and the hardcoding was the wrong reason: the law it should have been
+      // reading is `game_source_priority`, the same table apply-team-merges.js now
+      // consults, so a pair from any two sources resolves the same way.
+      //
+      // A tie or an unknown source still throws: two rows from the SAME source are not a
+      // cross-source duplicate, and this script must not guess which of them is real.
+      const [prio] = await c.execute('SELECT source, priority FROM game_source_priority');
+      const rank = Object.fromEntries(prio.map(r => [r.source, r.priority]));
+      const ordered = [...rows].sort((x, y) => (rank[y.src] ?? -1) - (rank[x.src] ?? -1));
+      const keep = ordered[0];
+      const drop = ordered.slice(1);
       if (!keep || !drop.length) {
-        throw new Error(`${p.d}: expected one ${KEEP_SOURCE} + one ${DROP_SOURCE}, got ` +
+        throw new Error(`${p.d}: expected two rows from different sources, got ` +
                         rows.map(r => `${r.id}:${r.src}`).join(', '));
+      }
+      if (drop.some(d => (rank[d.src] ?? -1) === (rank[keep.src] ?? -1))) {
+        throw new Error(`${p.d}: sources tie on priority (${rows.map(r => `${r.id}:${r.src}`).join(', ')})` +
+                        ` — a same-source pair is not a cross-source duplicate`);
       }
 
       for (const d of drop) {
@@ -92,14 +110,14 @@ const SEASON = 2026;
                 first_seen_at, last_seen_at)
              VALUES (?, 'home_away_orientation', ?, ?, ?, ?, NOW(), NOW())
              ON DUPLICATE KEY UPDATE other_value = VALUES(other_value), last_seen_at = NOW()`,
-            [keep.id, KEEP_SOURCE, `home=${keep.hs} away=${keep.aws}`,
-             DROP_SOURCE, `home=${d.hs} away=${d.aws}`]);
+            [keep.id, keep.src, `home=${keep.hs} away=${keep.aws}`,
+             d.src, `home=${d.hs} away=${d.aws}`]);
           logged++;
-          console.log(`      logged conflict: ${KEEP_SOURCE} home=${keep.hs} | ${DROP_SOURCE} home=${d.hs}`);
+          console.log(`      logged conflict: ${keep.src} home=${keep.hs} | ${d.src} home=${d.hs}`);
         }
 
         const [r] = await c.execute('DELETE FROM games WHERE id = ? AND canonical_source = ?',
-                                    [d.id, DROP_SOURCE]);
+                                    [d.id, d.src]);
         if (r.affectedRows !== 1) throw new Error(`delete of #${d.id} affected ${r.affectedRows} rows`);
         deleted++;
       }

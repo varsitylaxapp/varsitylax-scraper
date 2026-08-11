@@ -75,7 +75,7 @@ for (const s of listStates()) {
   if (label) SOURCE_STATE[label.toLowerCase()] = s.code;
 }
 
-const out = { season: SEASON, misCreated: [], misAttributed: [], duplicatePairs: [], ambiguous: [] };
+const out = { season: SEASON, misCreated: [], misAttributed: [], duplicatePairs: [], mirrored: [], ambiguous: [] };
 
 async function q(sql, p = []) { return (await db.execute(sql, p))[0]; }
 
@@ -206,8 +206,45 @@ async function duplicatePairs() {
   }
 }
 
+// ── (C) the same fixture under two identities, orientation flipped ───────────
+//
+// `uq_game (season, home_team_id, away_team_id, game_date)` CANNOT SEE THIS. Two rows
+// for one game — one from each source, one with the sides swapped, each naming a
+// different identity of the same school — satisfy the key perfectly and both survive.
+//
+// Found in the window #5 rehearsal, not by this gate: merging `borah_id` into
+// `borah_capital_id` would have produced two mirrored pairs that no constraint and no
+// check would then have reported. Direction (B) catches same-orientation duplicates
+// because they collide; this catches the ones that do not.
+async function mirroredCrossIdentity() {
+  const rows = await q(`
+    SELECT a.id AS idA, b.id AS idB, a.game_date AS d,
+           ta.slug AS slugA, ta.state AS stateA, tb.slug AS slugB, tb.state AS stateB,
+           o.slug AS opponent, a.canonical_source AS srcA, b.canonical_source AS srcB,
+           a.home_score AS ahs, a.away_score AS aas, b.home_score AS bhs, b.away_score AS bas
+    FROM games a
+    JOIN games b ON b.season = a.season AND b.game_date = a.game_date AND b.id > a.id
+    -- opposite orientation: a's home team is b's away team
+    JOIN teams o  ON o.id = a.home_team_id AND o.id = b.away_team_id
+    JOIN teams ta ON ta.id = a.away_team_id
+    JOIN teams tb ON tb.id = b.home_team_id
+    WHERE a.season = ? AND ta.id <> tb.id
+      AND (LOWER(ta.name) LIKE CONCAT(SUBSTRING_INDEX(LOWER(tb.name), ' ', 1), '%')
+        OR LOWER(tb.name) LIKE CONCAT(SUBSTRING_INDEX(LOWER(ta.name), ' ', 1), '%'))`, [SEASON]);
+  for (const r of rows) {
+    out.mirrored.push({
+      date: String(r.d).slice(0, 10),
+      a: `#${r.idA} ${r.stateA}:${r.slugA} (${r.srcA}) ${r.ahs}-${r.aas}`,
+      b: `#${r.idB} ${r.stateB}:${r.slugB} (${r.srcB}) ${r.bhs}-${r.bas}`,
+      sharedOpponent: r.opponent,
+      scoresAgree: `${r.ahs}-${r.aas}` === `${r.bas}-${r.bhs}`,
+    });
+  }
+}
+
 function report() {
-  const n = out.misCreated.length + out.misAttributed.length + out.duplicatePairs.length;
+  const n = out.misCreated.length + out.misAttributed.length + out.duplicatePairs.length
+          + out.mirrored.length;
   if (AS_JSON) { console.log(JSON.stringify(out, null, 2)); return n; }
 
   console.log(`\n══ CROSS-STATE AUDIT — season ${SEASON} ══\n`);
@@ -226,6 +263,11 @@ function report() {
     console.log(`   #${String(r.gameId).padEnd(6)} ${r.date}  ${r.source}(${r.sourceState})  "${r.raw}" → ${r.resolvedTo}  should be ${r.shouldBe}   vs ${r.opponent}`);
   }
 
+  console.log(`\n── (C) MIRRORED across identities — uq_game cannot see these — ${out.mirrored.length}`);
+  for (const r of out.mirrored) {
+    console.log(`   ${r.date}  ${r.a}  ==  ${r.b}   vs ${r.sharedOpponent}${r.scoresAgree ? '' : '   ⚠ scores disagree'}`);
+  }
+
   console.log(`\n── reassignment list: one fixture, two rows — ${out.duplicatePairs.length} pair(s)`);
   for (const r of out.duplicatePairs) {
     console.log(`   ${r.date}  keep #${String(r.keepGameId).padEnd(6)} ${r.keep.padEnd(18)} drop #${String(r.dropGameId).padEnd(6)} ${r.drop.padEnd(18)} both vs ${r.sharedOpponent}`);
@@ -240,6 +282,7 @@ function report() {
   await misCreatedRows();
   await misAttributedGames(out.ambiguous);
   await duplicatePairs();
+  await mirroredCrossIdentity();
   const n = report();
   process.exit(n === 0 ? 0 : 1);
 })().catch(err => { console.error('[cross-state-audit] FATAL:', err.message); process.exit(2); });
