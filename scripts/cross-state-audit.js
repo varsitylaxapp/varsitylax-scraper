@@ -44,10 +44,25 @@ const db = require('./../src/db');
 const { listStates } = require('./../src/config/states');
 
 const args = process.argv.slice(2);
-const SEASON = parseInt(
-  (args.find(a => a.startsWith('--season')) || '').split('=')[1] ||
-  (args[args.indexOf('--season') + 1] || '') || process.env.SEASON || '2026');
 const AS_JSON = args.includes('--json');
+
+// SEASON, parsed so that a bad parse STOPS rather than proceeds.
+//
+// The first version of this took `--season` either as `=N` or as the next argv entry,
+// and `node cross-state-audit.js --json` made `indexOf('--season')` return -1, so the
+// "next entry" was argv[0] — `--json` — and the season became NaN. Every query then
+// matched nothing and the audit printed a clean verdict and exited 0. **It was wired
+// into the rehearsal gate at the time.** A gate that reports clean because it asked the
+// database about season NaN is the vacuous-pass family this repo keeps cataloguing, and
+// it is worse than no gate because it is believed.
+const seasonFlag = args.find(a => a.startsWith('--season='));
+const seasonPos = args.indexOf('--season') >= 0 ? args[args.indexOf('--season') + 1] : undefined;
+const rawSeason = (seasonFlag ? seasonFlag.split('=')[1] : seasonPos) ?? process.env.SEASON ?? '2026';
+const SEASON = parseInt(rawSeason, 10);
+if (!Number.isInteger(SEASON) || SEASON < 2000 || SEASON > 2100) {
+  console.error(`[cross-state-audit] FATAL: bad season ${JSON.stringify(rawSeason)}`);
+  process.exit(2);
+}
 
 // Which state a SOURCE speaks for. Derived from the registry rather than hardcoded, so a
 // new state's league arrives with its own scheduleSource label and needs no edit here.
