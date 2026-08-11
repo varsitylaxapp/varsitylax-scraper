@@ -292,6 +292,26 @@ if [ "$WINDOW4" = "1" ]; then
     || die "geographic coherence flagged a team — a season may be on the wrong school"
 fi
 
+# ── cross-state collisions, BOTH directions ──────────────────────────────────
+#
+# Runs for every window, not only the import ones: the collision family is a property of
+# the resolver, not of any single import, and the 36 Oregon games that ended up on
+# Washington's Liberty and Lincoln were written by the OHSLA scrape — a path no import
+# window touches.
+#
+# Coherence answers "is this season on the right school?". This answers the question
+# coherence cannot: "is this GAME on the right school, in the right state?" A game
+# attributed to an existing same-name team in another state moves no count anywhere and
+# is invisible to every check that counts rows.
+say "cross-state collision audit (both directions)"
+CSA_OUT=$(node scripts/cross-state-audit.js --season=2026 2>&1)
+CSA_RC=$?
+printf '%s\n' "$CSA_OUT" | grep -E "ambiguous|MIS-CREATED|MIS-ATTRIBUTED|reassignment|VERDICT" | sed 's/^/     /'
+if [ "$CSA_RC" -ne 0 ]; then
+  echo "     Findings above are the reassignment list. A window must not ship while they stand."
+  die "cross-state audit flagged collisions"
+fi
+
 # ── 7. HEAD's API, booted against this schema ────────────────────────────────
 say "$([ "$WINDOW2" = 1 ] && echo 7 || echo 5). boot HEAD's API against the rehearsal schema"
 export DB_TARGET=rehearsal

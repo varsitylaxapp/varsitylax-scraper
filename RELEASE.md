@@ -1205,3 +1205,125 @@ Verify after: both `"Mountain View"` and `"Mountain View (WA)"` resolve to
 `mountain_view_wa` under `state='WA'`, and `"Mountain View"` still resolves to
 `mt_view` under `state='OR'`. The script asserts all three and rolls back if any
 fails.
+
+---
+
+# Window #5 — the cross-state collision batch (the "Brandon incident")
+
+**Status: AUDITED, NOT EXECUTED.** Nothing below has been written to production. The
+audit is committed and reproducible: `node scripts/cross-state-audit.js`.
+
+Brandon Fortier (WHSBLA Executive Board) was testing against production and found Oregon
+opponents on Washington schedules. He was right, and the audit that his report prompted
+found the defect is wider than the cases he could see.
+
+## The root cause, in one line of code
+
+`src/dual-write.js`, `writeGames()`:
+
+```js
+const aliases = await loadAliasMap();      // no state argument → every team, all states
+...
+for (const r of rows) map.set(r.a, r);     // Map keyed by bare name → last row wins
+```
+
+`team_aliases` carries a `state` column and is unique per state — the data model knows a
+school name is not a key. `loadAliasMap(state)` honours it, and `writeRankings` passes
+one. `writeGames` does not, and the comment above the call explains why it does not: an
+OHSLA schedule legitimately names out-of-state opponents, so games cannot be resolved
+inside a single state the way rankings can. **That reasoning is correct and the
+implementation of it is not.** "Cannot resolve within one state" was implemented as
+"resolve without reference to state at all", and the difference is 36 games.
+
+**This exact root cause has been fixed once already, in the other path.** The Mountain
+View collision recorded above — thirteen Idaho games written onto a Bellevue team because
+a roster lookup searched globally — was the same bug in the LaxNumbers importer, fixed by
+state-scoping the lookup (`16b3c15`). The scrape path was never revisited. A root cause
+fixed in one call site and left in another is not fixed.
+
+## What it did, both directions
+
+The family has two shapes, and a check for one reports the other clean.
+
+**(A) Rows MIS-CREATED — 5.** A cross-border game names a school with no alias in the
+namespace, so a new team row appears beside the real one.
+
+| row | | duplicate of |
+|---|---|---|
+| `ID:borah_id` "Borah" | 3 games, none in-state | `borah_capital_id` |
+| `AZ:brophy_az` "Brophy College Prep" | 1 game | `brophy_prep_az` |
+| `WA:bishop_blanchet_wa` | 1 game | `blanchet_wa` (merge applied on staging, never replayed on prod) |
+| `NV:centennial_nv` | 1 game | — needs a ruling |
+| `MT:glacier_mt` | 1 game | — needs a ruling |
+
+**(B) Games MIS-ATTRIBUTED — 36.** A cross-border game names a school that DOES have an
+alias, belonging to another state's team. No row is created. No count moves anywhere.
+
+Three names in the whole database cannot be resolved without a state — `liberty`,
+`lincoln`, `mountain view` — and all 36 are theirs:
+
+| | phantom Oregon games attached | its real games |
+|---|---|---|
+| `WA:liberty_wa` | 17 | 11 WHSBLA |
+| `WA:lincoln_wa` | 19 | 11 WHSBLA |
+| `WA:mountain_view_wa` | 1 | 6 WHSBLA |
+
+Washington's Liberty shows 28 games, 17 of which belong to a school in Hillsboro. That is
+what a board member opens the app and sees.
+
+**Why every existing gate passed.** OHSLA's scrape emits one row per team perspective and
+`writeGames` merges them on `season|homeId|awayId|date`. When the two perspectives resolve
+the same opponent to two different teams, the merge key differs, so both survive — as two
+valid rows, each with a real score, each satisfying `uq_game`. Counts go UP, never down.
+Geographic coherence asks whether a SEASON is on the right school; it has no opinion about
+a GAME. `scripts/cross-state-audit.js` now asks the missing question and runs in the
+rehearsal suite for every window, not only import windows.
+
+## Also found: window #4-lite never wrote `team_seasons`
+
+Independent of the collisions, and to be fixed first because the rest depends on it.
+
+Window #4-lite shipped AZ/ID/MT/NV with teams, games and rankings — and **zero
+`team_seasons` rows**. Prod today: `OR 41/41`, `WA 75/77`, and `AZ 0/18 · ID 0/32 ·
+MT 0/7 · NV 0/16`. The importer creates teams and games and never opens a season row, so
+those four states have programs with no seasonal existence.
+
+**It is invisible from the app**, which is why it survived: `/api/v2/teams` LEFT JOINs
+`team_seasons`, so a missing row costs a null conference and a null record, not a missing
+team. It surfaced only when scoping `/teams` by season was modelled — an INNER JOIN drops
+0 Oregon rows, 2 Washington rows (both correct) and **all 73 rows in the four new
+states**. Shipping that scoping without seeding first would have emptied the Teams tab in
+the exact four states being tested.
+
+## Order of work
+
+1. Seed `team_seasons` for AZ/ID/MT/NV 2026 — the importer gap above.
+2. State-scope `writeGames` + a re-import guard that refuses an ambiguous name rather
+   than picking the last row.
+3. `/teams` season scoping, with `payload-diff.js` proving Oregon byte-identical.
+4. This window: merges, the 36 reassignments, record recomputation, coherence and
+   cross-state audit after.
+
+---
+
+## DATA DECISIONS ARE RELEASE ARTIFACTS
+
+**Founding case: this window.** The rule, from here on:
+
+> A decision about WHICH REAL-WORLD THING a row refers to — a merge, an alias, a
+> do-not-merge, a game reassignment — is a release artifact. It ships in a window, with a
+> rehearsal, a written reason and an assertion that names the case. It is never an ad-hoc
+> `UPDATE`, and it is never applied to one environment only.
+
+Three of the four merges in this batch were already decided, correctly, months ago —
+`blanchet`, `brophy`, the do-not-merge list — and recorded in
+`data/whsbla-2026/alias-decisions.json`. They were applied to **staging** and never
+replayed to production, so production has carried known-wrong identities ever since while
+the decision sat in git looking done. A decision that exists in one environment is not a
+decision; it is a draft.
+
+That is why the merges in this window are replayed from the recorded decisions rather
+than re-derived, why the assertions name Brandon's exact cases (`liberty_wa` and
+`lincoln_wa` must hold 11 games each, all WHSBLA, none against an Oregon team), and why
+`cross-state-audit.js` is committed rather than thrown away: **the audit that finds a
+class of defect is itself an artifact, or the class comes back.**
