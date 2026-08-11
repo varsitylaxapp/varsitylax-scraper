@@ -17,13 +17,34 @@ const COMMIT = process.argv.includes('--commit');
 const q = async (s, p = []) => (await db.execute(s, p))[0];
 
 (async () => {
-  if (db.targetLabel !== 'staging') {
-    console.error(`FATAL: target is "${db.targetLabel}". Staging only.`); process.exit(1);
+  // STAGING AND REHEARSAL FREELY; PRODUCTION ONLY INSIDE A DECLARED WINDOW.
+  //
+  // The staging-only guard was right for as long as merges were a staging hygiene step,
+  // and it is exactly how production came to carry the blanchet duplicate for two weeks
+  // while the ruling sat in git looking done: the script that applies decisions could not
+  // reach the database the decisions were about. Widening it is the point of window #5,
+  // so the widening is explicit and narrow — prod needs BOTH --window and --commit, and
+  // says so on the way in.
+  const WINDOW = process.argv.includes('--window');
+  if (db.targetLabel === 'prod' && !(WINDOW && COMMIT)) {
+    console.error(`FATAL: target is prod. Production merges require --window --commit,`);
+    console.error(`       and belong inside a rehearsed window (see RELEASE.md, window #5).`);
+    process.exit(1);
+  }
+  if (db.targetLabel === 'prod') {
+    console.log('*** PRODUCTION MERGE — declared window, decisions replayed from alias-decisions.json ***');
   }
   console.log(`\n=== apply-team-merges ===\ntarget: ${db.targetDescription}`);
   console.log(`mode:   ${COMMIT ? 'COMMIT' : 'DRY RUN'}\n`);
 
-  const merges = JSON.parse(fs.readFileSync('data/whsbla-2026/alias-decisions.json', 'utf8')).merges || [];
+  const all = JSON.parse(fs.readFileSync('data/whsbla-2026/alias-decisions.json', 'utf8')).merges || [];
+  // A SUPERSEDED DECISION IS STILL A DECISION, and it stays in the file — the trail is
+  // the point. It must not be APPLIED, though, and the two brophy entries point in
+  // opposite directions, so replaying the list blindly would merge a row and then merge
+  // it back. Skipping on `superseded_by` is what makes "keep the history" safe.
+  const merges = all.filter(m => !m.superseded_by);
+  const skipped = all.length - merges.length;
+  if (skipped) console.log(`  (${skipped} superseded ruling(s) skipped; they remain in the file with their reason)\n`);
   for (const m of merges) {
     const [keep] = await q('SELECT id,slug,name FROM teams WHERE slug=?', [m.keep_slug]);
     const [gone] = await q('SELECT id,slug,name FROM teams WHERE slug=?', [m.merge_slug]);

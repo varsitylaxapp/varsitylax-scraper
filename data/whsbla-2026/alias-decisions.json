@@ -1,201 +1,245 @@
 {
- "_comment": "Human-approved alias resolutions. Decisions as data, with approver and evidence. Any name a machine cannot resolve is FLAGGED, never guessed; a human ruling is recorded here and becomes the written trail. Pattern approved 2026-07-28. roster_admissions records teams ADMITTED to a roster-locked state by league authority; alias decisions resolve NAMES, admissions add MEMBERS. merges records duplicate team rows collapsed by human ruling; alias decisions resolve NAMES, admissions add MEMBERS, merges remove DUPLICATES. KEEPER RULE: in a merge, the keeper is the row that CARRIES MORE — seasons, games, ranking entries, provenance — never the row that happened to be created first or by a particular source. brophy_az (kept the a7 row) and blanchet_wa (kept the export row) are worked examples pointing in opposite directions. do_not_merge records pairs a human has ruled DISTINCT; scripts/reconcile-placeholders.js reads it and suppresses them, so a rejected candidate is never re-proposed. display_renames records display-name changes ruled by a human; the alias rows named in alias_preserved must continue to resolve afterwards, which scripts/strip-state-suffix-mountain-view.js asserts before committing.",
- "decisions": [
-  {
-   "alias": "Bainbridge",
-   "source_export": "WHSBLA Teams.xlsx 2026",
-   "resolves_to_slug": "bainbridge_island_wa",
-   "state": "WA",
-   "division_id": "wa_3a",
-   "approver": "Spencer",
-   "approved_on": "2026-07-28",
-   "basis": "human-approved, explicitly NOT a machine inference",
-   "evidence": [
-    "exactly one Bainbridge HS exists in WA, located on Bainbridge Island",
-    "the WHSBLA schedule's own Location field reads 'Bainbridge HS'",
-    "production already carries a bainbridge_island_wa row seeded from a7-classification.json",
-    "LaxNumbers class page v=3583 (3A) lists 'Bainbridge Island'"
-   ]
-  },
-  {
-   "alias": "Aloha (OR)",
-   "source_export": "WHSBLA Teams.xlsx 2026",
-   "resolves_to_slug": "aloha_southridge",
-   "state": "OR",
-   "division_id": null,
-   "approver": "Spencer",
-   "approved_on": "2026-07-28",
-   "basis": "human-approved: WHSBLA export names an existing Oregon co-op by its short name",
-   "evidence": [
-    "OHSLA canonical name is the co-op 'Aloha/Southridge'",
-    "Oregon's 41-team roster is curated and roster-locked; this is an alias, not a new team"
-   ]
-  },
-  {
-   "alias": "Bend-Calderra (OR)",
-   "source_export": "WHSBLA Teams.xlsx 2026",
-   "resolves_to_slug": "bend_caldera",
-   "state": "OR",
-   "division_id": null,
-   "approver": "Spencer",
-   "approved_on": "2026-07-28",
-   "basis": "human-approved: EXPORT TYPO — 'Calderra' has a doubled r",
-   "evidence": [
-    "OHSLA canonical name is 'Bend/Caldera' (one r)",
-    "LaxNumbers Oregon feed also lists 'Bend/Caldera'",
-    "no school named 'Calderra' exists; this is a transcription error in the league export"
-   ]
-  },
-  {
-   "alias": "Clackamas (OR)",
-   "source_export": "WHSBLA Teams.xlsx 2026",
-   "resolves_to_slug": "nelson",
-   "state": "OR",
-   "division_id": null,
-   "approver": "Spencer",
-   "approved_on": "2026-07-28",
-   "basis": "human-approved: WHSBLA export names an existing Oregon co-op by its short name",
-   "evidence": [
-    "OHSLA canonical name is the co-op 'Clackamas/Nelson', slug 'nelson'",
-    "Oregon roster is locked; this is an alias, not a new team"
-   ]
-  },
-  {
-   "alias": "Claremont",
-   "source_export": "WHSBLA Teams.xlsx 2026",
-   "resolves_to_slug": "claremont_bc",
-   "state": "BC",
-   "division_id": null,
-   "approver": "Spencer",
-   "approved_on": "2026-07-28",
-   "basis": "human-approved: alias, NOT a rename — the canonical name stays 'Claremont Secondary'",
-   "evidence": [
-    "existing row claremont_bc is named 'Claremont Secondary' (from a7-classification)",
-    "WHSBLA export uses the short form; short form becomes an alias and the canonical name is untouched"
-   ]
-  }
- ],
- "roster_admissions": [
-  {
-   "name": "Vashon",
-   "slug": "vashon_wa",
-   "state": "WA",
-   "admit_for_season": 2027,
-   "division_id": "wa_2a",
-   "division_source": "whsbla_draft_2027",
-   "approver": "Spencer",
-   "approved_on": "2026-07-28",
-   "basis": "league authority — roster membership changes come from the league, not from inference",
-   "evidence": [
-    "appears in Brandon Fortier's official WHSBLA 2027 draft classification file",
-    "the roster lock worked as designed: it surfaced a membership change for a ruling instead of auto-creating",
-    "no 2026 rows anywhere — Vashon was not a 2026 member"
-   ],
-   "reversal_rule": "if the October final list drops Vashon, it is removed the same way it arrived — by league authority"
-  }
- ],
- "merges": [
-  {
-   "keep_slug": "brophy_az",
-   "merge_slug": "brophy_prep_az",
-   "state": "AZ",
-   "approver": "Spencer",
-   "approved_on": "2026-07-29",
-   "basis": "same school reached from two directions by two sources; pre-dates the roster lock",
-   "evidence": [
-    "Brophy College Preparatory, Phoenix AZ — universally shortened to 'Brophy Prep'",
-    "brophy_az seeded from a7-classification.json as an OREGON opponent, name 'Brophy College Prep'",
-    "brophy_prep_az seeded from the WHSBLA 2026 export as a WASHINGTON opponent, name 'Brophy Prep'",
-    "both rows are state=AZ; neither has team_seasons or ranking_entries",
-    "brophy_az holds the only game reference (Sunset @ Brophy College Prep, 2026-03-21)"
-   ],
-   "keep_rationale": "brophy_az holds the game FK and carries the school's full canonical name",
-   "note": "Non-curated states have no roster lock, so nothing prevented this. Merging is a prerequisite gate before AZ rankings are ever enabled."
-  },
-  {
-   "keep_slug": "blanchet_wa",
-   "merge_slug": "bishop_blanchet_wa",
-   "state": "WA",
-   "approver": "Spencer",
-   "approved_on": "2026-07-29",
-   "basis": "same school reached from two directions; pre-dates the roster lock",
-   "evidence": [
-    "Bishop Blanchet High School, Seattle — the WHSBLA export lists it as 'Blanchet'",
-    "bishop_blanchet_wa seeded from a7-classification as an OREGON opponent (Lake Oswego/Riverdale @ Bishop Blanchet, canonical_source=ohsla)",
-    "blanchet_wa seeded from the WHSBLA 2026 export as a MEMBER: 6 league games, wa_private for 2026 AND 2027, 1 ranking entry",
-    "the a7 row has no team_seasons at all"
-   ],
-   "keep_rationale": "blanchet_wa carries far more — 6 games vs 1, two seasons vs none, a ranking row vs none",
-   "note": "Direction is OPPOSITE to the brophy merge, deliberately. See the keeper rule."
-  }
- ],
- "do_not_merge": [
-  {
-   "a": "seattle_prep_wa",
-   "b": "seattle_academy_wa",
-   "state": "WA",
-   "approver": "Spencer",
-   "approved_on": "2026-07-29",
-   "reason": "distinct schools; the sweep's generic-word stripping ('prep', 'academy') collides them",
-   "evidence": [
-    "Seattle Preparatory and Seattle Academy are separate Seattle schools",
-    "Seattle Prep is the 2026 PV/Open champion in our own bracket data (beat Bellevue 14-13 OT at Starfire)",
-    "both carry seasons=2 rank=1 — both were adopted cleanly at import"
-   ]
-  },
-  {
-   "a": "seattle_prep_wa",
-   "b": "west_seattle_wa",
-   "state": "WA",
-   "approver": "Spencer",
-   "approved_on": "2026-07-29",
-   "reason": "distinct schools; shared token 'seattle' only",
-   "evidence": [
-    "runner-up match from the same sweep; recorded so it is never re-proposed"
-   ]
-  },
-  {
-   "a": "mount_si_wa",
-   "b": "mount_vernon_wa",
-   "state": "WA",
-   "approver": "Spencer",
-   "approved_on": "2026-07-29",
-   "reason": "distinct schools; shared token 'mount' only",
-   "evidence": [
-    "Mount Si is in Snoqualmie; Mount Vernon is in Skagit Valley",
-    "Mount Si is the 2026 4A champion in our bracket data"
-   ]
-  },
-  {
-   "a": "north_creek_wa",
-   "b": "north_kitsap_wa",
-   "state": "WA",
-   "approver": "Spencer",
-   "approved_on": "2026-07-29",
-   "reason": "distinct schools; shared token 'north' only",
-   "evidence": [
-    "North Creek is in Bothell; North Kitsap is in Poulsbo",
-    "the sweep itself flagged this as TIE rather than picking a keeper"
-   ]
-  }
- ],
- "display_renames": [
-  {
-   "slug": "mountain_view_wa",
-   "from": "Mountain View (WA)",
-   "to": "Mountain View",
-   "alias_preserved": [
-    "Mountain View (WA)",
-    "Mountain View"
-   ],
-   "approver": "Spencer",
-   "date": "2026-07-29",
-   "ruling": "Canonical display names are context-free; disambiguation is the out-of-state tag's job, derived per viewing context. The suffix was also wrong in WA's own context, where it stated the state redundantly.",
-   "evidence": "Only 1 of 159 teams carried a bracketed state in its display name.",
-   "applied": {
-    "staging": "2026-07-29",
-    "prod": "SEQUENCED — after the iOS build with the out-of-state tag is live; see RELEASE.md"
-   }
-  }
- ]
+  "_comment": "Human-approved alias resolutions. Decisions as data, with approver and evidence. Any name a machine cannot resolve is FLAGGED, never guessed; a human ruling is recorded here and becomes the written trail. Pattern approved 2026-07-28. roster_admissions records teams ADMITTED to a roster-locked state by league authority; alias decisions resolve NAMES, admissions add MEMBERS. merges records duplicate team rows collapsed by human ruling; alias decisions resolve NAMES, admissions add MEMBERS, merges remove DUPLICATES. KEEPER RULE: in a merge, the keeper is the row that CARRIES MORE — seasons, games, ranking entries, provenance — never the row that happened to be created first or by a particular source. blanchet_wa (kept the export row) and brophy_prep_az (kept the feed row) are worked examples. The 2026-07-29 brophy ruling kept the a7 row and is SUPERSEDED: it applied the rule correctly to a database in which brophy_az did carry more, and window #4-lite then inverted that. A merge direction is a fact about the rows on the day it is ruled, so a superseded entry stays in this file with its reason rather than being edited away. do_not_merge records pairs a human has ruled DISTINCT; scripts/reconcile-placeholders.js reads it and suppresses them, so a rejected candidate is never re-proposed. display_renames records display-name changes ruled by a human; the alias rows named in alias_preserved must continue to resolve afterwards, which scripts/strip-state-suffix-mountain-view.js asserts before committing.",
+  "decisions": [
+    {
+      "alias": "Bainbridge",
+      "source_export": "WHSBLA Teams.xlsx 2026",
+      "resolves_to_slug": "bainbridge_island_wa",
+      "state": "WA",
+      "division_id": "wa_3a",
+      "approver": "Spencer",
+      "approved_on": "2026-07-28",
+      "basis": "human-approved, explicitly NOT a machine inference",
+      "evidence": [
+        "exactly one Bainbridge HS exists in WA, located on Bainbridge Island",
+        "the WHSBLA schedule's own Location field reads 'Bainbridge HS'",
+        "production already carries a bainbridge_island_wa row seeded from a7-classification.json",
+        "LaxNumbers class page v=3583 (3A) lists 'Bainbridge Island'"
+      ]
+    },
+    {
+      "alias": "Aloha (OR)",
+      "source_export": "WHSBLA Teams.xlsx 2026",
+      "resolves_to_slug": "aloha_southridge",
+      "state": "OR",
+      "division_id": null,
+      "approver": "Spencer",
+      "approved_on": "2026-07-28",
+      "basis": "human-approved: WHSBLA export names an existing Oregon co-op by its short name",
+      "evidence": [
+        "OHSLA canonical name is the co-op 'Aloha/Southridge'",
+        "Oregon's 41-team roster is curated and roster-locked; this is an alias, not a new team"
+      ]
+    },
+    {
+      "alias": "Bend-Calderra (OR)",
+      "source_export": "WHSBLA Teams.xlsx 2026",
+      "resolves_to_slug": "bend_caldera",
+      "state": "OR",
+      "division_id": null,
+      "approver": "Spencer",
+      "approved_on": "2026-07-28",
+      "basis": "human-approved: EXPORT TYPO — 'Calderra' has a doubled r",
+      "evidence": [
+        "OHSLA canonical name is 'Bend/Caldera' (one r)",
+        "LaxNumbers Oregon feed also lists 'Bend/Caldera'",
+        "no school named 'Calderra' exists; this is a transcription error in the league export"
+      ]
+    },
+    {
+      "alias": "Clackamas (OR)",
+      "source_export": "WHSBLA Teams.xlsx 2026",
+      "resolves_to_slug": "nelson",
+      "state": "OR",
+      "division_id": null,
+      "approver": "Spencer",
+      "approved_on": "2026-07-28",
+      "basis": "human-approved: WHSBLA export names an existing Oregon co-op by its short name",
+      "evidence": [
+        "OHSLA canonical name is the co-op 'Clackamas/Nelson', slug 'nelson'",
+        "Oregon roster is locked; this is an alias, not a new team"
+      ]
+    },
+    {
+      "alias": "Claremont",
+      "source_export": "WHSBLA Teams.xlsx 2026",
+      "resolves_to_slug": "claremont_bc",
+      "state": "BC",
+      "division_id": null,
+      "approver": "Spencer",
+      "approved_on": "2026-07-28",
+      "basis": "human-approved: alias, NOT a rename — the canonical name stays 'Claremont Secondary'",
+      "evidence": [
+        "existing row claremont_bc is named 'Claremont Secondary' (from a7-classification)",
+        "WHSBLA export uses the short form; short form becomes an alias and the canonical name is untouched"
+      ]
+    }
+  ],
+  "roster_admissions": [
+    {
+      "name": "Vashon",
+      "slug": "vashon_wa",
+      "state": "WA",
+      "admit_for_season": 2027,
+      "division_id": "wa_2a",
+      "division_source": "whsbla_draft_2027",
+      "approver": "Spencer",
+      "approved_on": "2026-07-28",
+      "basis": "league authority — roster membership changes come from the league, not from inference",
+      "evidence": [
+        "appears in Brandon Fortier's official WHSBLA 2027 draft classification file",
+        "the roster lock worked as designed: it surfaced a membership change for a ruling instead of auto-creating",
+        "no 2026 rows anywhere — Vashon was not a 2026 member"
+      ],
+      "reversal_rule": "if the October final list drops Vashon, it is removed the same way it arrived — by league authority"
+    }
+  ],
+  "merges": [
+    {
+      "keep_slug": "brophy_az",
+      "merge_slug": "brophy_prep_az",
+      "state": "AZ",
+      "approver": "Spencer",
+      "approved_on": "2026-07-29",
+      "basis": "same school reached from two directions by two sources; pre-dates the roster lock",
+      "evidence": [
+        "Brophy College Preparatory, Phoenix AZ — universally shortened to 'Brophy Prep'",
+        "brophy_az seeded from a7-classification.json as an OREGON opponent, name 'Brophy College Prep'",
+        "brophy_prep_az seeded from the WHSBLA 2026 export as a WASHINGTON opponent, name 'Brophy Prep'",
+        "both rows are state=AZ; neither has team_seasons or ranking_entries",
+        "brophy_az holds the only game reference (Sunset @ Brophy College Prep, 2026-03-21)"
+      ],
+      "keep_rationale": "brophy_az holds the game FK and carries the school's full canonical name",
+      "note": "Non-curated states have no roster lock, so nothing prevented this. Merging is a prerequisite gate before AZ rankings are ever enabled.",
+      "superseded_by": "brophy-2026-08-10",
+      "superseded_reason": "The KEEPER RULE is \"carries more\". When this was ruled on 2026-07-29 that WAS brophy_az: its evidence reads \"neither has team_seasons or ranking_entries\" and \"brophy_az holds the only game reference\". Window #4-lite imported Arizona's LaxNumbers season on 2026-08-04 and inverted both facts — brophy_prep_az now carries 23 games and 2 ranking entries against brophy_az's 1 and 0. The rule did not change; the database did, and this row is now a worked example of the rule pointing the wrong way."
+    },
+    {
+      "keep_slug": "blanchet_wa",
+      "merge_slug": "bishop_blanchet_wa",
+      "state": "WA",
+      "approver": "Spencer",
+      "approved_on": "2026-07-29",
+      "basis": "same school reached from two directions; pre-dates the roster lock",
+      "evidence": [
+        "Bishop Blanchet High School, Seattle — the WHSBLA export lists it as 'Blanchet'",
+        "bishop_blanchet_wa seeded from a7-classification as an OREGON opponent (Lake Oswego/Riverdale @ Bishop Blanchet, canonical_source=ohsla)",
+        "blanchet_wa seeded from the WHSBLA 2026 export as a MEMBER: 6 league games, wa_private for 2026 AND 2027, 1 ranking entry",
+        "the a7 row has no team_seasons at all"
+      ],
+      "keep_rationale": "blanchet_wa carries far more — 6 games vs 1, two seasons vs none, a ranking row vs none",
+      "note": "Direction is OPPOSITE to the brophy merge, deliberately. See the keeper rule."
+    },
+    {
+      "id": "brophy-2026-08-10",
+      "keep_slug": "brophy_prep_az",
+      "merge_slug": "brophy_az",
+      "state": "AZ",
+      "approver": "Spencer",
+      "approved_on": "2026-08-10",
+      "supersedes": "the 2026-07-29 brophy ruling, direction reversed",
+      "basis": "same school, same as before; the KEEPER RULE applied to the database as it is now rather than as it was in July",
+      "evidence": [
+        "brophy_prep_az: 23 games, 2 ranking entries — the row LaxNumbers rates and the app currently serves as ranked",
+        "brophy_az: 1 game (Sunset @ Brophy College Prep, 2026-03-21, canonical_source=ohsla), 0 rankings, no team_seasons",
+        "the July ruling rested on \"neither has team_seasons or ranking_entries\" and \"brophy_az holds the only game reference\"; window #4-lite falsified both on 2026-08-04",
+        "brophy_prep_ii_az is a separate squad and is NOT part of this merge",
+        "surfaced by scripts/cross-state-audit.js as a direction-(A) mis-created row"
+      ],
+      "keep_rationale": "brophy_prep_az carries 23 games and both ranking entries; keeping brophy_az would delete the ranked row and change a public slug the app already serves",
+      "alias_preserved": [
+        "Brophy College Prep"
+      ],
+      "note": "Replaying the recorded direction verbatim would have honoured the artifact and broken the rule the artifact cites. A decision is about a database state; when that state is falsified by a later window, the decision is re-made and both are kept."
+    },
+    {
+      "id": "borah-2026-08-10",
+      "keep_slug": "borah_capital_id",
+      "merge_slug": "borah_id",
+      "state": "ID",
+      "approver": "Spencer",
+      "approved_on": "2026-08-10",
+      "basis": "one combined Boise program reached under two names; OHSLA writes the short name, the Idaho feed writes the combined one",
+      "evidence": [
+        "borah_capital_id \"Borah/Capital\": 12 games, ranked",
+        "borah_id \"Borah\": 3 games, all against Oregon opponents (mt_view 2026-04-10, sprague and bend_caldera 2026-04-11), 0 rankings, no team_seasons",
+        "those three are the games docs/user-visible-changes.md change #4 describes as played against Borah/Capital — the notes and the data disagree today",
+        "surfaced by scripts/cross-state-audit.js as a direction-(A) mis-created row"
+      ],
+      "keep_rationale": "KEEPER RULE: borah_capital_id carries 12 games and the ranking; borah_id carries 3 cross-border games and nothing else",
+      "alias_preserved": [
+        "Borah"
+      ],
+      "note": "The alias matters more than usual here: OHSLA will keep writing \"Borah\", and after the resolver fix an unresolvable name is REFUSED rather than guessed — so without this alias those three games would stop importing instead of landing on the wrong row."
+    }
+  ],
+  "do_not_merge": [
+    {
+      "a": "seattle_prep_wa",
+      "b": "seattle_academy_wa",
+      "state": "WA",
+      "approver": "Spencer",
+      "approved_on": "2026-07-29",
+      "reason": "distinct schools; the sweep's generic-word stripping ('prep', 'academy') collides them",
+      "evidence": [
+        "Seattle Preparatory and Seattle Academy are separate Seattle schools",
+        "Seattle Prep is the 2026 PV/Open champion in our own bracket data (beat Bellevue 14-13 OT at Starfire)",
+        "both carry seasons=2 rank=1 — both were adopted cleanly at import"
+      ]
+    },
+    {
+      "a": "seattle_prep_wa",
+      "b": "west_seattle_wa",
+      "state": "WA",
+      "approver": "Spencer",
+      "approved_on": "2026-07-29",
+      "reason": "distinct schools; shared token 'seattle' only",
+      "evidence": [
+        "runner-up match from the same sweep; recorded so it is never re-proposed"
+      ]
+    },
+    {
+      "a": "mount_si_wa",
+      "b": "mount_vernon_wa",
+      "state": "WA",
+      "approver": "Spencer",
+      "approved_on": "2026-07-29",
+      "reason": "distinct schools; shared token 'mount' only",
+      "evidence": [
+        "Mount Si is in Snoqualmie; Mount Vernon is in Skagit Valley",
+        "Mount Si is the 2026 4A champion in our bracket data"
+      ]
+    },
+    {
+      "a": "north_creek_wa",
+      "b": "north_kitsap_wa",
+      "state": "WA",
+      "approver": "Spencer",
+      "approved_on": "2026-07-29",
+      "reason": "distinct schools; shared token 'north' only",
+      "evidence": [
+        "North Creek is in Bothell; North Kitsap is in Poulsbo",
+        "the sweep itself flagged this as TIE rather than picking a keeper"
+      ]
+    }
+  ],
+  "display_renames": [
+    {
+      "slug": "mountain_view_wa",
+      "from": "Mountain View (WA)",
+      "to": "Mountain View",
+      "alias_preserved": [
+        "Mountain View (WA)",
+        "Mountain View"
+      ],
+      "approver": "Spencer",
+      "date": "2026-07-29",
+      "ruling": "Canonical display names are context-free; disambiguation is the out-of-state tag's job, derived per viewing context. The suffix was also wrong in WA's own context, where it stated the state redundantly.",
+      "evidence": "Only 1 of 159 teams carried a bracketed state in its display name.",
+      "applied": {
+        "staging": "2026-07-29",
+        "prod": "SEQUENCED — after the iOS build with the out-of-state tag is live; see RELEASE.md"
+      }
+    }
+  ]
 }
