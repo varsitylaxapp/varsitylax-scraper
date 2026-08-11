@@ -648,8 +648,17 @@ below was written in good faith, ran green, and certified nothing.
 | 4 | `schedule/all?state=WA\|200\|season` | asserted a key called `season` existed and printed `2026`; **no number of games, including zero, could fail it** | real key, real floor: `\|200\|games\|500` |
 | 5 | `node … \| sed` in the rehearsal | a pipeline reports the **last** command's status, so `if ! node … \| sed` tested *sed*. The guard against vacuous checks was itself one, on the way in | capture the status directly, before any pipe |
 | 6 | `playoff-formats?state=AZ\|200\|season` | keyed on `season`, printed `2026`. Arizona having **no brackets today (correct)** and **no brackets after a regression (broken)** were indistinguishable to it | expectations are now MANDATORY and can be exact: `\|brackets\|=0` |
+| 9 | the window #5 REHEARSAL itself | it ran the seeder, the reassignment executor, the merge script and the dedupe against a faithful prod dump, watched 77 findings go to 0, and certified the window. It never once called `writeGames` — **the code under test was not the code under load.** The writer crashed on its first real cron cycle | every window that deploys scraper code must rehearse AT LEAST ONE `writeGames` execution against the dump, same standing as boot-against-prod-schema. `scripts/test-writegames.js` reproduces the crash in seconds |
 | 8 | the window #5 resurrection check | `node src/index.js` with `WRITE_MODE` unset defaults to `'legacy'`, so `writeV2` was false and **`writeGames` — the fixed resolver, the entire subject of the check — never ran**. "1368 games before, 1368 after, zero new phantoms" was true and meaningless: no reachable input could have made it red | the check moves to the CRON, which runs the deployed code under Railway's real environment. A local run cannot prove anything about a deployed default |
 | 7 | `cross-state-audit.js --json` | `--season` was accepted positionally as well as with `=`, and the positional branch ran unconditionally — so `--json` alone made `indexOf('--season')` return −1 and argv[0] became the value. `parseInt('--json')` is NaN, every query matched nothing, and the audit **printed a clean verdict and exited 0**. It was already wired into the rehearsal gate | a bad season is fatal: parsed strictly, range-checked, exit 2. Proven on all four argument paths, including one season that legitimately passes |
+
+**A DIAGNOSTIC MUST NOT BE ABLE TO KILL ITS PATIENT** — a small law, earned in the
+margins of member 9. The crash surfaced through a code path whose entire purpose was to
+make a refusal visible. Logging is not part of the work it observes and must never be
+able to end it: values are coerced at the call edge (mysql2 rejects `undefined`, so one
+unset variable upstream turns a log line into an exception), and a throw inside
+unresolved-logging is caught, reported and swallowed. Losing a diagnostic row is a
+nuisance; losing the batch is an outage.
 
 **Member 8 is WRITE_MODE's second offence.** RELEASE.md already records the first: it went
 missing from Railway's variables on 2026-07-11 and silently reverted dual-write to legacy
