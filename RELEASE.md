@@ -648,6 +648,19 @@ below was written in good faith, ran green, and certified nothing.
 | 4 | `schedule/all?state=WA\|200\|season` | asserted a key called `season` existed and printed `2026`; **no number of games, including zero, could fail it** | real key, real floor: `\|200\|games\|500` |
 | 5 | `node … \| sed` in the rehearsal | a pipeline reports the **last** command's status, so `if ! node … \| sed` tested *sed*. The guard against vacuous checks was itself one, on the way in | capture the status directly, before any pipe |
 | 6 | `playoff-formats?state=AZ\|200\|season` | keyed on `season`, printed `2026`. Arizona having **no brackets today (correct)** and **no brackets after a regression (broken)** were indistinguishable to it | expectations are now MANDATORY and can be exact: `\|brackets\|=0` |
+| 7 | `cross-state-audit.js --json` | `--season` was accepted positionally as well as with `=`, and the positional branch ran unconditionally — so `--json` alone made `indexOf('--season')` return −1 and argv[0] became the value. `parseInt('--json')` is NaN, every query matched nothing, and the audit **printed a clean verdict and exited 0**. It was already wired into the rehearsal gate | a bad season is fatal: parsed strictly, range-checked, exit 2. Proven on all four argument paths, including one season that legitimately passes |
+
+**Member 7 was found IN THE INSTRUMENT BUILT TO CATCH THE OTHERS**, on the day it was
+written, by running it two ways and getting two answers. The audit that had just found 77
+production defects reported "clean" when asked for JSON.
+
+That is the ledger's lesson compounding rather than repeating. Every earlier member was a
+check over *someone else's* work; this one was a check over the vacuous-pass family
+itself, written by someone who had just read all six entries — and it landed in the
+rehearsal suite green. **No gate is exempt from the gate standard, least of all a gate
+built by the person who most recently learned why the standard exists.** A new instrument
+gets the same treatment as the system it measures: prove it can fail, prove it can pass,
+before believing a single green from it.
 
 **Two more of the same shape, recorded here though they are not numbered members** — both
 found 2026-08-04, both about evidence that was *printed* rather than *asserted*:
@@ -1296,6 +1309,44 @@ states**. Shipping that scoping without seeding first would have emptied the Tea
 the exact four states being tested.
 
 ## Order of work
+
+**CODE BEFORE DATA — and the reason is the resurrection lesson in a new coat.** The old
+resolver runs every two hours. Reassigning 36 games while the global alias map is still
+live means the next OHSLA cycle re-mints them, and the window reports success against a
+database that is already re-corrupting. The deploy is what makes the data batch durable.
+
+1. **Code.** `writeGames` resolves state-aware (`resolveSide`); `seed-team-seasons.js`
+   for AZ/ID/MT/NV 2026; `/teams` season scoping.
+2. **Rehearse** the whole window on a fresh prod dump. `cross-state-audit.js` must FAIL
+   against today's prod state (77 findings: 5 + 36 + 36) and PASS against the rehearsed
+   end state. **That pair is the window's proof** — a gate that only ever ran green
+   proves nothing, which is ledger member 7's whole point.
+3. **Execute.** push (deploys resolver + scoping) → one scrape cycle mints ZERO new
+   phantoms → data batch → assertions.
+4. Report the ladder.
+
+### Sequencing hazard inside step 1, measured not reasoned
+
+Seeding and scoping are both "code", and they cannot land in either order.
+
+Deploying `/teams` scoping against today's unseeded prod empties four states. Measured
+against production 2026-08-10, LEFT JOIN vs INNER JOIN on the live row set:
+
+```
+OR: LEFT=41 INNER=41  payload BYTE-IDENTICAL
+WA: LEFT=77 INNER=75  dropped: bishop_blanchet_wa, vashon_wa      (both correct)
+AZ: LEFT=18 INNER=0     ID: LEFT=32 INNER=0
+MT: LEFT=7  INNER=0     NV: LEFT=16 INNER=0
+```
+
+So the seeder runs against prod **before** the API change is deployed, and the seeder
+recomputes records in the same breath — a seeded row carries `wins = 0`, and `/teams`
+renders `record` from wins whenever wins is non-null, so seeding without recomputing
+shows **0-0** for every team in four states to whoever opens the app in between.
+
+Oregon's byte-identity is the release-gating fact and it is measured above, not asserted:
+41 rows in, 41 rows out, payload identical.
+
 
 1. Seed `team_seasons` for AZ/ID/MT/NV 2026 — the importer gap above.
 2. State-scope `writeGames` + a re-import guard that refuses an ambiguous name rather
