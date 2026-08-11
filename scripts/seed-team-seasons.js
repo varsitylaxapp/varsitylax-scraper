@@ -39,7 +39,7 @@
 //     2  could not run
 
 const db = require('./../src/db');
-const { isValidState } = require('./../src/config/states');
+const { isValidState, defaultDivision } = require('./../src/config/states');
 
 const args = process.argv.slice(2);
 const APPLY = args.includes('--apply');
@@ -110,12 +110,40 @@ async function q(sql, p = []) { return (await db.execute(sql, p))[0]; }
     process.exit(0);
   }
 
+  // ── the division rows have to exist first, and they do not ──────────────────
+  //
+  // `team_seasons.division_id` is VARCHAR(16) **NOT NULL** with an FK to `divisions`, so
+  // there is no such thing as a season row without a division. The registry advertises
+  // `az_open`/`id_open`/`mt_open`/`nv_open` — `/api/v2/states` has been serving them for
+  // weeks — but the DIVISIONS TABLE HAS NO ROWS FOR THEM. Only or_open and WA's four
+  // exist. RELEASE.md predicted this in the registry's own comment ("the matching
+  // divisions rows do not exist in the database yet… seeding must create the row first")
+  // and window #4-lite never did it, because it never created a season row either.
+  //
+  // Caught by the rehearsal, on the dump, before prod: the first version of this script
+  // wrote a `division` column that does not exist on this schema at all.
+  const created = [];
+  for (const code of STATES) {
+    const d = defaultDivision(code);
+    if (!d) { console.error(`\nFATAL: ${code} has no default division in the registry`); process.exit(1); }
+    const [r] = await db.execute(
+      `INSERT IGNORE INTO divisions (id, state, name, is_default, sort_order) VALUES (?, ?, ?, ?, ?)`,
+      [d.id, code, d.name, d.isDefault ? 1 : 0, d.sortOrder || 0]);
+    if (r.affectedRows) created.push(`${code}:${d.id}`);
+  }
+  if (created.length) console.log(`\ncreated ${created.length} missing division row(s): ${created.join(', ')}`);
+
   let inserted = 0;
   for (const c of candidates) {
-    // conference/division NULL and wins/losses 0 deliberately — see the header.
+    // conference NULL and wins/losses 0 deliberately — see the header. `division_source`
+    // is NULL to match Oregon's 41 rows exactly: it means "no league published a
+    // classification", which is the truth for a state whose only division is the
+    // registry's degenerate default. Inventing a source here would make these rows
+    // look league-blessed.
+    const d = defaultDivision(c.state);
     const [r] = await db.execute(
-      `INSERT IGNORE INTO team_seasons (team_id, season, conference, division, wins, losses)
-       VALUES (?, ?, NULL, NULL, 0, 0)`, [c.id, SEASON]);
+      `INSERT IGNORE INTO team_seasons (team_id, season, conference, division_id, division_source, wins, losses)
+       VALUES (?, ?, NULL, ?, NULL, 0, 0)`, [c.id, SEASON, d.id]);
     inserted += r.affectedRows;
   }
 
