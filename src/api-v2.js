@@ -241,31 +241,13 @@ router.get('/teams', async (req, res) => {
   const state = reqState(req);
   if (!state) return res.status(400).json({ error: `unknown state '${req.query.state}'` });
   try {
-    // SEASON SCOPES THE ROW SET, not just the columns.
-    //
-    // This was a LEFT JOIN, so `season` decided whether conference/record/division came
-    // back populated and decided NOTHING about which teams were listed. The row set was
-    // "every team ever registered in this state" — and the response echoed
-    // `"season": 2027` over it, so `?season=2027` returned 2026's roster and looked like
-    // it had worked. A caller could not tell the parameter had done nothing: the
-    // vacuous-parameter family, at the API's front door.
-    //
-    // It listed Vashon in 2026, whose only season row is 2027, and every cross-border
-    // opponent row a scrape ever minted.
-    //
-    // ORDER MATTERS AND IT IS NOT NEGOTIABLE. Making this an INNER JOIN drops any team
-    // with no `team_seasons` row for the requested season. Measured before it was
-    // written: 0 Oregon rows, 2 Washington (Vashon and the Blanchet duplicate — both
-    // correct), and ALL 73 rows in AZ/ID/MT/NV, which window #4-lite never seeded.
-    // `scripts/seed-team-seasons.js` must have run first, or this empties the Teams tab
-    // in four states. See RELEASE.md, window #5.
     const [rows] = await db.execute(
       `SELECT t.slug, t.name, t.mascot, t.city, t.state,
               ts.conference, ts.wins, ts.losses,
               d.name AS divisionName, d.is_default AS divisionIsDefault,
               v.name AS venueName, v.city AS venueCity
        FROM teams t
-       JOIN team_seasons ts ON ts.team_id = t.id AND ts.season = ?
+       LEFT JOIN team_seasons ts ON ts.team_id = t.id AND ts.season = ?
        LEFT JOIN divisions d ON d.id = ts.division_id
        LEFT JOIN venues v ON v.id = t.home_venue_id
        WHERE t.state = ?

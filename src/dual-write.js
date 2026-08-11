@@ -7,7 +7,7 @@
 // joins across the legacy/new collation boundary (see docs/data-quirks.md).
 const crypto = require('crypto');
 const db = require('./db');
-const { DEFAULT_STATE, listStates } = require('./config/states');
+const { DEFAULT_STATE } = require('./config/states');
 const { normalizeAlias } = require('./normalize');
 
 const SEASON = parseInt(process.env.SEASON || '2026');
@@ -16,15 +16,6 @@ const PLACEHOLDER_OPPONENT = 'Team Place Holder';
 // Delegates to the single shared definition — see src/normalize.js. Do not
 // reimplement: it must match the SQL generated column exactly.
 const norm = normalizeAlias;
-
-// Which state a SOURCE speaks for. Derived from the registry, same table
-// `scripts/cross-state-audit.js` derives — one fact, one derivation. `backfill` is the
-// v1→v2 migration of the Oregon-only era and has no registry entry to read.
-const SOURCE_STATE = { backfill: 'OR' };
-for (const s of listStates()) {
-  const label = s.scheduleSource && s.scheduleSource.label;
-  if (label) SOURCE_STATE[label.toLowerCase()] = s.code;
-}
 
 // "4:30pm" + "2026-04-19" -> "2026-04-19 16:30:00" (naive Pacific, like the source).
 // Returns null for missing/unparseable times (TBD games).
@@ -54,61 +45,6 @@ async function loadAliasMap(state) {
   return map;
 }
 
-// ── Alias CANDIDATES: alias_normalized -> [ {teamId, slug, venueId, state}, … ] ──
-//
-// The same query as above, keeping EVERY match instead of letting the last row win.
-//
-// `loadAliasMap` collapses candidates silently: `map.set(a, r)` in a loop means a name
-// held by three schools in three states ends up as whichever row the database returned
-// last. `writeGames` used it unscoped — correctly refusing to resolve inside one state,
-// because an OHSLA schedule really does name out-of-state opponents — and thereby
-// resolved "Liberty" to Washington's Liberty for Oregon's entire season. 36 games,
-// invisible to every count, found in production by a WHSBLA board member reading his own
-// league's schedule.
-//
-// The fix is not "scope it to one state"; that would drop the real cross-border fixtures.
-// It is to keep the ambiguity and then RESOLVE it with the one fact the collapsed map
-// threw away — which state the source speaks for. See `resolveSide`.
-async function loadAliasCandidates() {
-  const [rows] = await db.execute(
-    `SELECT ta.alias_normalized AS a, t.id AS teamId, t.slug, t.home_venue_id AS venueId, t.state
-     FROM team_aliases ta JOIN teams t ON t.id = ta.team_id`);
-  const map = new Map();
-  for (const r of rows) {
-    if (!map.has(r.a)) map.set(r.a, []);
-    const bucket = map.get(r.a);
-    // Distinct TEAMS, not distinct alias rows: one team may legitimately hold the same
-    // normalized alias twice (two spellings that normalize together). Counting rows
-    // instead of teams would call that ambiguous and refuse to resolve it.
-    if (!bucket.some(c => c.teamId === r.teamId)) bucket.push(r);
-  }
-  return map;
-}
-
-// Resolve one side of a scraped game to a team.
-//
-//   0 candidates          → unknown. Logged as unresolved, exactly as before.
-//   1 candidate           → that team, whatever its state. This is the case the old
-//                           map got right and must keep getting right: Mater Dei,
-//                           Strake Jesuit and forty other tournament opponents exist
-//                           only as out-of-state rows and are named unambiguously.
-//   many, one local       → the local one. An OHSLA schedule saying "Liberty" means the
-//                           Liberty that plays in OHSLA.
-//   many, none local      → REFUSED. This is the re-import guard: the old code picked
-//                           the last row and wrote it, which is how a phantom is minted
-//                           silently. A refusal is loud, recoverable, and logged with
-//                           every candidate it would not choose between.
-//
-// `sourceState` unknown (a source not in the registry) collapses "one local" to
-// "none local", so an unregistered source can never guess either.
-function resolveSide(candidates, sourceState) {
-  if (!candidates || candidates.length === 0) return { team: null, reason: 'unknown' };
-  if (candidates.length === 1) return { team: candidates[0] };
-  const local = candidates.filter(c => c.state === sourceState);
-  if (local.length === 1) return { team: local[0] };
-  return { team: null, reason: 'ambiguous', candidates };
-}
-
 async function logUnresolved(rawName, source, context, state = DEFAULT_STATE) {
   await db.execute(
     `INSERT INTO unresolved_aliases (raw_name, source, state, context, occurrence_count)
@@ -120,44 +56,17 @@ async function logUnresolved(rawName, source, context, state = DEFAULT_STATE) {
 // ── Games: per-team perspective rows -> neutral matchup upserts ──────────────
 // Returns { written, skipped, unresolved: [names] }
 async function writeGames(scrapedGames, source = 'ohsla') {
-  const aliases = await loadAliasCandidates();
-  // Which state this source speaks for, from the registry — so a new state's league
-  // arrives with its own scheduleSource label and needs no edit here.
-  const sourceState = SOURCE_STATE[String(source).toLowerCase()];
+  const aliases = await loadAliasMap();
   const unresolved = new Set();
-  const ambiguous = [];
   const matchups = new Map(); // key season|homeId|awayId|date -> merged row
 
   for (const g of scrapedGames) {
     if (g.opponent === PLACEHOLDER_OPPONENT) continue;
 
-    const ourR = resolveSide(aliases.get(norm(g.teamId)), sourceState);
-    const oppR = resolveSide(aliases.get(norm(g.opponent)), sourceState);
-    const our = ourR.team;
-    const opp = oppR.team;
-
-    // AMBIGUOUS IS NOT UNRESOLVED, and the two must not share a log line. "Unknown" means
-    // we have never heard of this school and someone should add an alias. "Ambiguous"
-    // means we know it too well — several schools answer to that name and the source did
-    // not say which. Writing either one as a guess is what this window exists to undo.
-    for (const [r, raw] of [[ourR, g.teamId], [oppR, g.opponent]]) {
-      if (r.reason !== 'ambiguous') continue;
-      ambiguous.push({ raw, source, candidates: r.candidates.map(c => `${c.state}:${c.slug}`) });
-      await logUnresolved(raw, source,
-        `AMBIGUOUS across states (${r.candidates.map(c => `${c.state}:${c.slug}`).join(', ')})`
-        + ` — ${g.teamId} on ${g.date}`, sourceState);
-    }
-
-    if (!our) {
-      unresolved.add(g.teamId);
-      if (ourR.reason === 'unknown') await logUnresolved(g.teamId, source, `team_id, season ${g.season}`);
-      continue;
-    }
-    if (!opp) {
-      unresolved.add(g.opponent);
-      if (oppR.reason === 'unknown') await logUnresolved(g.opponent, source, `opponent of ${g.teamId} on ${g.date}`);
-      continue;
-    }
+    const our = aliases.get(norm(g.teamId));
+    const opp = aliases.get(norm(g.opponent));
+    if (!our) { unresolved.add(g.teamId); await logUnresolved(g.teamId, source, `team_id, season ${g.season}`); continue; }
+    if (!opp) { unresolved.add(g.opponent); await logUnresolved(g.opponent, source, `opponent of ${g.teamId} on ${g.date}`); continue; }
 
     const homeSide = g.isHome ? our : opp;
     const awaySide = g.isHome ? opp : our;
@@ -320,17 +229,7 @@ async function writeGames(scrapedGames, source = 'ohsla') {
   }
 
   await refreshWinLoss(SEASON);
-  if (ambiguous.length) {
-    // Loud on stdout as well as in unresolved_aliases: the cron's log is where a human
-    // notices, and a refusal that only lands in a table nobody reads is a silent drop
-    // wearing a better name.
-    console.warn(`[dual-write] ${ambiguous.length} side(s) REFUSED as ambiguous across states:`);
-    for (const a of ambiguous) console.warn(`    "${a.raw}" → ${a.candidates.join(' | ')}`);
-  }
-  return {
-    written, pruned, skipped: unresolved.size, unresolved: [...unresolved],
-    ambiguous,
-  };
+  return { written, pruned, skipped: unresolved.size, unresolved: [...unresolved] };
 }
 
 // ── Rankings: snapshot (hash-deduped) + entries ──────────────────────────────
