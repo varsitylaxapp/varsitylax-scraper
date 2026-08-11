@@ -75,7 +75,7 @@ for (const s of listStates()) {
   if (label) SOURCE_STATE[label.toLowerCase()] = s.code;
 }
 
-const out = { season: SEASON, misCreated: [], misAttributed: [], duplicatePairs: [], mirrored: [], ambiguous: [] };
+const out = { season: SEASON, misCreated: [], recognised: [], misAttributed: [], duplicatePairs: [], mirrored: [], ambiguous: [] };
 
 async function q(sql, p = []) { return (await db.execute(sql, p))[0]; }
 
@@ -90,6 +90,11 @@ async function q(sql, p = []) { return (await db.execute(sql, p))[0]; }
 // have a row of its own. Reporting the other forty is how a gate teaches people to
 // ignore it.
 const COVERED = new Set(listStates().map(s => s.code));
+
+// Sources that are a LEAGUE naming its own opponents, as opposed to a scrape resolving a
+// bare name. A league export listing "Glacier (MT)" is a curated statement that the
+// fixture happened against that school; a scrape's alias is an inference.
+const CURATED_SOURCES = new Set(['whsbla-2026', 'whsbla', 'ohsla']);
 
 async function misCreatedRows() {
   const rows = await q(`
@@ -114,10 +119,36 @@ async function misCreatedRows() {
     const sib = lead ? await q(
       `SELECT slug FROM teams WHERE state = ? AND id <> ? AND LOWER(name) LIKE CONCAT(?, '%')`,
       [r.state, r.id, lead]) : [];
-    out.misCreated.push({
+    // ── RECOGNISED: an unrated real opponent, not a mis-created row ───────────
+    //
+    // Ruled 2026-08-10. Check (A)'s signature — every game out of state — assumes that in
+    // a COVERED state a school already has a row of its own, because we import that
+    // state's season. The assumption breaks for a school its state's RATING feed does not
+    // cover: Glacier (Kalispell MT) and Centennial (Las Vegas NV) are real programs named
+    // by the WHSBLA export as opponents of Sumner and Tahoma, and LaxNumbers rates
+    // neither. They are the Mater Dei case wearing a covered state's postcode.
+    //
+    // Three conditions, all required, none of them "looks fine to me":
+    //   · every alias came from a CURATED LEAGUE source — a league naming its own
+    //     opponents, not a scrape guessing
+    //   · no same-state sibling — nothing for it to be a duplicate OF
+    //   · unrated — no ranking entry, so no roster import should have produced a row
+    //
+    // Recognised rows are SUMMARISED, not reported as findings, so the gate can reach
+    // exit 0 honestly. A row that meets two of three stays a finding: the whole point of
+    // the ledger is that a gate which is permanently yellow is a gate people stop reading.
+    const aliasSrc = await q(
+      `SELECT DISTINCT source FROM team_aliases WHERE team_id = ?`, [r.id]);
+    const [[rated]] = [await q(`SELECT COUNT(*) n FROM ranking_entries WHERE team_id = ?`, [r.id])];
+    const curated = aliasSrc.length > 0 && aliasSrc.every(a => CURATED_SOURCES.has(String(a.source || '').toLowerCase()));
+    const recognised = curated && sib.length === 0 && rated.n === 0;
+    const row = {
       slug: r.slug, state: r.state, name: r.name, games: Number(r.games),
       sameStateSiblings: sib.map(s => s.slug),
-    });
+      aliasSources: aliasSrc.map(a => a.source),
+    };
+    if (recognised) { out.recognised.push({ ...row, why: 'curated-league opponent, no same-state sibling, unrated' }); continue; }
+    out.misCreated.push(row);
   }
 }
 
@@ -256,6 +287,11 @@ function report() {
   for (const r of out.misCreated) {
     console.log(`   ${r.state}:${r.slug.padEnd(22)} "${r.name}"  ${r.games} game(s), none in-state`
       + (r.sameStateSiblings.length ? `  → duplicate of ${r.sameStateSiblings.join(', ')}` : `  → no same-state sibling; may be a real out-of-state-only program`));
+  }
+
+  if (out.recognised.length) {
+    console.log(`\n── recognised (not findings): ${out.recognised.length} unrated real opponent(s) in covered states`);
+    for (const r of out.recognised) console.log(`   ${r.state}:${r.slug.padEnd(22)} "${r.name}"  ${r.games} game(s) — ${r.why}`);
   }
 
   console.log(`\n── (B) games MIS-ATTRIBUTED to an existing same-name team — ${out.misAttributed.length}`);

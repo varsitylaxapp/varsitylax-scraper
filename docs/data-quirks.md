@@ -189,3 +189,26 @@ Reconcile PER TEAM — that is what turned "13 ≠ 12, still open" into a closed
 
 Arizona and Montana happen to have neither exclusion in 2026, so their totals match
 exactly. That agreement is a coincidence of the data, not a property of the source.
+
+## LaxNumbers' Idaho page mis-attributes Borah's road games
+
+**Found 2026-08-10, window #5. Upstream, in the source — not ours to fix.**
+
+Borah/Capital travelled to Bend on 2026-04-10 and lost 12–13 to Oregon's Mountain
+View. LaxNumbers' Idaho feed records that game against **Idaho's** Mountain View
+(`mountain_view_id`, Meridian) instead — the same bare-name collision this window fixed
+in our own resolver, occurring one layer up.
+
+The tell is that "Mountain View" is a name three schools answer to across OR/WA/ID, and a
+single-state feed resolving a road opponent has no more state context than our alias map
+had. We cannot correct their page. We can decline to inherit it: `game_source_priority`
+puts OHSLA (100) above LaxNumbers (50), and OHSLA is the league whose own member reported
+the trip.
+
+Settled by two oracles, recorded in `alias-decisions.json` as `borah-mtview-2026-04-10`:
+a firsthand account (Spencer — his son's club, that weekend: three games Apr 10–11,
+matching OHSLA's three fixtures exactly) and the imported LaxNumbers rows themselves,
+which show exactly one 12–13 Mountain View fixture that day.
+
+**If a future import re-creates it**, that is not a regression in our code — it is the
+upstream page unchanged. `scripts/cross-state-audit.js` check (C) will surface it.

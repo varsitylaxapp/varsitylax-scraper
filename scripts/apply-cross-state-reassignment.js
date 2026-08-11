@@ -163,6 +163,27 @@ async function verifyPair(p) {
     // happened N pairs ago and this is a live database.
     const again = await verifyPair(p);
     if (!again.ok) { console.error(`   ABORT at ${p.date} #${p.dropGameId}: ${again.why}`); process.exit(1); }
+    // CROSS-SOURCE DISAGREEMENTS ARE LOGGED; SAME-SOURCE ONES ARE NOT.
+    //
+    // The 36 Liberty/Lincoln pairs are both OHSLA — two perspectives of one scrape that
+    // resolved apart — so there is no disagreement between SOURCES to record, and writing
+    // `owner_source=ohsla other_source=ohsla` 36 times would bury the one row that matters.
+    //
+    // Borah 4/10 is the one that matters: OHSLA says Oregon's mt_view hosted Borah,
+    // LaxNumbers' Idaho page says Idaho's mountain_view_id did. Ruled ONE game by two
+    // oracles (alias-decisions.json `borah-mtview-2026-04-10`). The losing row is deleted,
+    // and what it claimed is kept — the upstream page still says it, and a future import
+    // that re-creates it must be recognisable as their error rather than ours.
+    if (again.keep.canonical_source !== again.drop.canonical_source) {
+      await db.execute(
+        `INSERT INTO source_conflicts (game_id, field, owner_source, owner_value, other_source, other_value, resolution)
+         VALUES (?, 'opponent_identity', ?, ?, ?, ?, ?)`,
+        [p.keepGameId, again.keep.canonical_source, p.keep,
+         again.drop.canonical_source, p.drop,
+         `cross-state reassignment: one fixture recorded by two sources against different `
+         + `identities of the same name; higher-priority source kept`]);
+      console.log(`   conflict logged on #${p.keepGameId}: ${again.keep.canonical_source}=${p.keep} vs ${again.drop.canonical_source}=${p.drop}`);
+    }
     const r = await q(`DELETE FROM games WHERE id = ?`, [p.dropGameId]);
     deleted += r.affectedRows;
     provenanceLost += gsr.n;

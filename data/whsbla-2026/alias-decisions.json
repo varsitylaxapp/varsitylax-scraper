@@ -241,5 +241,31 @@
         "prod": "SEQUENCED — after the iOS build with the out-of-state tag is live; see RELEASE.md"
       }
     }
+  ],
+  "game_identity_rulings": [
+    {
+      "id": "borah-mtview-2026-04-10",
+      "approver": "Spencer",
+      "approved_on": "2026-08-10",
+      "question": "On 2026-04-10 a 12-13 loss to Borah appears twice: OHSLA #243 as Oregon mt_view, LaxNumbers #96806 as Idaho mountain_view_id. One game or two?",
+      "ruling": "ONE game. Oregon mt_view at home vs visiting Borah. Keep OHSLA #243; delete LaxNumbers #96806.",
+      "oracle_a": {
+        "kind": "firsthand",
+        "who": "Spencer",
+        "on": "2026-08-10",
+        "standing": "his son's club — he was there that weekend",
+        "answer": "Borah traveled to Bend and played three games across Apr 10-11, matching OHSLA's three fixtures exactly (mt_view 4/10; sprague and bend_caldera 4/11)."
+      },
+      "oracle_b": {
+        "kind": "independent count",
+        "on": "2026-08-10",
+        "attempted": "live fetch of Borah/Capital's LaxNumbers team page",
+        "result": "BLOCKED — laxnumbers.com returns HTTP 403 from this machine (the Cloudflare block recorded in scripts/laxnumbers-probe.js). Not an independent re-fetch.",
+        "substitute": "the already-imported LaxNumbers rows for Borah/Capital, which show exactly ONE 12-13 Mountain View fixture on 4/10 and a separate 12-3 on 3/04 — consistent with one game, not two."
+      },
+      "why_not_a_coincidence": "Two oracles agree. A second 12-13 game against a different Mountain View on the same day would be coincidence; the firsthand account rules it out, and the imported feed shows only one.",
+      "upstream_finding": "LaxNumbers' Idaho page attributes Borah's ROAD game to mountain_view_id — the same bare-name collision this window fixes locally, occurring upstream in the source itself. We cannot fix their page; we can refuse to inherit it. Logged to source_conflicts and to docs/data-quirks.md.",
+      "note": "No deletion was made until both oracles reported. The audit carried this pair as an open finding in the meantime rather than letting it be forgotten."
+    }
   ]
 }
