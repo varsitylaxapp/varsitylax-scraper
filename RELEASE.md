@@ -648,7 +648,20 @@ below was written in good faith, ran green, and certified nothing.
 | 4 | `schedule/all?state=WA\|200\|season` | asserted a key called `season` existed and printed `2026`; **no number of games, including zero, could fail it** | real key, real floor: `\|200\|games\|500` |
 | 5 | `node … \| sed` in the rehearsal | a pipeline reports the **last** command's status, so `if ! node … \| sed` tested *sed*. The guard against vacuous checks was itself one, on the way in | capture the status directly, before any pipe |
 | 6 | `playoff-formats?state=AZ\|200\|season` | keyed on `season`, printed `2026`. Arizona having **no brackets today (correct)** and **no brackets after a regression (broken)** were indistinguishable to it | expectations are now MANDATORY and can be exact: `\|brackets\|=0` |
+| 8 | the window #5 resurrection check | `node src/index.js` with `WRITE_MODE` unset defaults to `'legacy'`, so `writeV2` was false and **`writeGames` — the fixed resolver, the entire subject of the check — never ran**. "1368 games before, 1368 after, zero new phantoms" was true and meaningless: no reachable input could have made it red | the check moves to the CRON, which runs the deployed code under Railway's real environment. A local run cannot prove anything about a deployed default |
 | 7 | `cross-state-audit.js --json` | `--season` was accepted positionally as well as with `=`, and the positional branch ran unconditionally — so `--json` alone made `indexOf('--season')` return −1 and argv[0] became the value. `parseInt('--json')` is NaN, every query matched nothing, and the audit **printed a clean verdict and exited 0**. It was already wired into the rehearsal gate | a bad season is fatal: parsed strictly, range-checked, exit 2. Proven on all four argument paths, including one season that legitimately passes |
+
+**Member 8 is WRITE_MODE's second offence.** RELEASE.md already records the first: it went
+missing from Railway's variables on 2026-07-11 and silently reverted dual-write to legacy
+for two days. The same default then produced a green check on a code path that never
+executed. A variable whose absence changes behaviour SILENTLY is not a configuration
+knob, it is a trapdoor — and this one has now cost two days of writes and one worthless
+verification.
+
+QUEUED FOR THE NEXT DEPLOY, not this window: a write-capable entry point must REFUSE when
+`WRITE_MODE` is unset from a non-deployed context, the same shape as `db.js`'s target
+guard ("NO SILENT DEFAULTS… missing config is now a startup failure"). `db.js` learned
+this lesson in July; `index.js` did not inherit it.
 
 **Member 7 was found IN THE INSTRUMENT BUILT TO CATCH THE OTHERS**, on the day it was
 written, by running it two ways and getting two answers. The audit that had just found 77
@@ -1378,3 +1391,26 @@ than re-derived, why the assertions name Brandon's exact cases (`liberty_wa` and
 `lincoln_wa` must hold 11 games each, all WHSBLA, none against an Oregon team), and why
 `cross-state-audit.js` is committed rather than thrown away: **the audit that finds a
 class of defect is itself an artifact, or the class comes back.**
+
+
+## Window #5 — unintended legacy write, verified inert
+
+During rung 3c a local `node src/index.js` ran with `WRITE_MODE` unset, so it took the
+legacy branch and upserted 662 OHSLA games into `team_schedules` on production. It was
+not a step in the ladder; the default put it there. See ledger member 8.
+
+**Verified against the window's own anchor dump rather than assumed:**
+
+```
+PROD    rows=684  contentHash=a150a40e608c42c54e59ed9a36a8bcbe
+ANCHOR  rows=684  contentHash=a150a40e608c42c54e59ed9a36a8bcbe
+        (team_id, game_date, game_time, opponent, is_home, is_conference,
+         result, team_score, opp_score, is_ot, season)
+```
+
+Identical row count, identical content hash across every meaningful column. **Refresh-only
+— zero content delta.** Timestamps moved; nothing a reader could see did.
+
+Risk bound, for the record: v1 has been frozen since July under `WRITE_MODE=v2`, is served
+only to 1.6.0 fallback clients, and the fallback fires only when v2 fails. v2 is healthy,
+so these rows are practically unread. That bounds the risk; the diff is what settles it.
