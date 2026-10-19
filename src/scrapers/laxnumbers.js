@@ -1,7 +1,19 @@
-const axios = require('axios');
+const { Impit } = require('impit');
 const { getState, DEFAULT_STATE } = require('../config/states');
 
 const SEASON = parseInt(process.env.SEASON || '2026');
+
+// 2026-10: LaxNumbers now sits behind Cloudflare bot management. The block is on
+// the TLS/HTTP client fingerprint, not the IP — axios/curl get 403 "Just a
+// moment…" from Railway AND from a residential line, while a Chrome fingerprint
+// gets 200 from a datacenter. impit impersonates Chrome's handshake with no
+// browser. Same fetch() API; responses are unchanged.
+const client = new Impit({ browser: 'chrome', timeout: 20000 });
+async function fetchLaxNumbers(url, referer) {
+  const res = await client.fetch(url, { headers: { Referer: referer } });
+  if (!res.ok) throw new Error(`LaxNumbers ${res.status} for ${url}`);
+  return res;
+}
 
 // NOTE: this is a plain JSON fetch, not a rendered page. There is no
 // JS-rendering path in this codebase — /ratings/service returns JSON directly.
@@ -21,13 +33,7 @@ async function scrapeLaxNumbers(state = getState(DEFAULT_STATE)) {
   const referer = `https://www.laxnumbers.com/ratings.php?${qs}`;
 
   console.log(`[LaxNumbers:${state.code}] Fetching API:`, apiUrl);
-  const { data: teams } = await axios.get(apiUrl, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; VarsityLaxScraper/1.0)',
-      'Referer':    referer,
-    },
-    timeout: 15000,
-  });
+  const teams = await (await fetchLaxNumbers(apiUrl, referer)).json();
 
   const results = teams.map(t => ({
     source:    'laxnumbers',
@@ -93,13 +99,7 @@ async function scrapeLaxNumbersTeamGames(state, teamNbr) {
   const referer = `https://www.laxnumbers.com/ratings.php?y=${SEASON}&v=${state.laxnumbersId}`;
   const url = `https://www.laxnumbers.com/team_info.php?y=${SEASON}&t=${teamNbr}`;
 
-  const { data: html } = await axios.get(url, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; VarsityLaxScraper/1.0)',
-      'Referer':    referer,
-    },
-    timeout: 20000,
-  });
+  const html = await (await fetchLaxNumbers(url, referer)).text();
 
   const cellText = c => c.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ')
                          .replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
