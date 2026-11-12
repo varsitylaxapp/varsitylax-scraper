@@ -73,6 +73,21 @@
         "existing row claremont_bc is named 'Claremont Secondary' (from a7-classification)",
         "WHSBLA export uses the short form; short form becomes an alias and the canonical name is untouched"
       ]
+    },
+    {
+      "alias": "Claremont School 1",
+      "source_export": "LaxNumbers 2026 team pages (WA ratings feed, v=3580)",
+      "resolves_to_slug": "claremont_bc",
+      "state": "BC",
+      "division_id": null,
+      "approver": "Spencer",
+      "approved_on": "2026-11-12",
+      "basis": "human-approved: alias, NOT a rename — the canonical name stays 'Claremont Secondary'",
+      "evidence": [
+        "LaxNumbers lists 'Claremont School 1' as an opponent on WA team pages (3 rows in 2026, e.g. 2026-03-28 Mount Si 10-15, 2026-03-27 Seattle Prep 11-8)",
+        "claremont_bc already carries 4 games in 2026 from WHSBLA/OHSLA; this resolves the LaxNumbers spelling to that row rather than creating a placeholder",
+        "applied to staging 2026-11-12 as team_aliases (state BC, source laxnumbers); NOT yet replayed to production — replay in a window per RELEASE.md 'DATA DECISIONS ARE RELEASE ARTIFACTS'"
+      ]
     }
   ],
   "roster_admissions": [
