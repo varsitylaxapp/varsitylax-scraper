@@ -251,11 +251,16 @@ async function ratingsRows(state) {
     const slugify = (name, suffix) =>
       norm(name).replace(/\s+/g, '_').slice(0, 56) + (suffix || '');
 
-    // A rated team in a ROSTER-LOCKED feed resolves only inside its own state (the row's
-    // `state`, else the feed's). No global fallback, no stateless placeholder.
+    // A rated team in a ROSTER-LOCKED feed resolves in the FEED's state first, then in the
+    // state LaxNumbers tags it with. League membership beats geography: Hermiston is an
+    // Oregon town in WHSBLA, rostered as hermiston_wa, and tagged OR by LaxNumbers.
+    // No global fallback, no stateless placeholder.
     const lockedSelfId = (t, code) => {
-      const home = t.state || code;
-      return stateIdx.get(home)?.get(norm(t.name)) ?? stateLooseIdx.get(home)?.get(loose(t.name)) ?? null;
+      for (const s of [code, t.state].filter(Boolean)) {
+        const id = stateIdx.get(s)?.get(norm(t.name)) ?? stateLooseIdx.get(s)?.get(loose(t.name));
+        if (id != null) return id;
+      }
+      return null;
     };
 
     // Dry run SIMULATES creation — assigning a provisional id and indexing it — so the
@@ -320,8 +325,8 @@ async function ratingsRows(state) {
       const rows = await ratingsRows(state);
       ratings.set(code, rows);
 
-      // LOCKED: match only, inside the row's OWN state — the WA feed carries an Oregon
-      // row, and a WA team must never be matched to another state's same-named school.
+      // LOCKED: match only, in the feed's state then the row's tagged state (see
+      // lockedSelfId). Never another state's same-named school.
       // Unmatched rows are counted here and reported per game in phase 2.
       if (ROSTER_LOCKED.has(code)) {
         let matched = 0;
