@@ -1,10 +1,15 @@
 #!/usr/bin/env node
 /**
- * Import 2026 game results for the NON-CURATED states (AZ, ID, MT, NV) from LaxNumbers.
+ * Import one season of game results for the NON-CURATED states (AZ, ID, MT, NV) from
+ * LaxNumbers. Washington may be DRY RUN only — see ROSTER_LOCKED below.
  *
  *   ./scripts/staging scripts/import-laxnumbers-games.js --state=ID
+ *   ./scripts/staging scripts/import-laxnumbers-games.js --state=ID --season=2027
  *   ./scripts/staging scripts/import-laxnumbers-games.js --state=ID --commit
  *   node scripts/import-laxnumbers-games.js --state=ID --stage-c --commit     (prod)
+ *
+ * SEASON: --season=YYYY, else $SEASON, else 2026. The resolved value and where it came
+ * from are printed in the banner. Anything outside 2000–2100 is refused.
  *
  * DRY RUN BY DEFAULT. Without --commit it fetches, resolves, and reports — including the
  * full unresolved-opponent list — and writes nothing.
@@ -128,9 +133,8 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 const pool = require('../src/db');
-const { scrapeLaxNumbers, scrapeLaxNumbersTeamGames } = require('../src/scrapers/laxnumbers');
+const { scrapeLaxNumbersTeamGames, fetchLaxNumbersRatingsRaw } = require('../src/scrapers/laxnumbers');
 const { getState } = require('../src/config/states');
-const axios = require('axios');
 const fs = require('fs');
 const norm  = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 const loose = s => norm(s).replace(/\b(high school|hs|school|academy|prep|the)\b/g, '').replace(/\s+/g, ' ').trim();
@@ -150,9 +154,42 @@ const RULINGS = (() => {
 
 const COMMIT  = process.argv.includes('--commit');
 const STAGE_C = process.argv.includes('--stage-c');
-const SEASON  = 2026;
 const STATES  = process.argv.filter(a => a.startsWith('--state='))
   .flatMap(a => a.slice(8).split(',')).map(x => x.trim().toUpperCase()).filter(Boolean);
+
+/**
+ * --season=YYYY, else $SEASON, else 2026. A malformed value is FATAL rather than a
+ * fallback: `--season 2027` (space, no `=`) silently importing 2026 is the exact failure
+ * scrapeLaxNumbers() once had with y= hardcoded.
+ */
+const { SEASON, SEASON_FROM } = (() => {
+  const fatal = msg => { console.error(`FATAL: ${msg}`); process.exit(1); };
+  if (process.argv.includes('--season')) fatal('--season needs a value: --season=YYYY');
+  const flags = process.argv.filter(a => a.startsWith('--season='));
+  if (flags.length > 1) fatal('--season given more than once');
+  const env = (process.env.SEASON ?? '').trim();
+  const [raw, from] = flags.length ? [flags[0].slice(9).trim(), '--season']
+                    : env           ? [env, '$SEASON']
+                    :                 ['2026', 'default'];
+  const n = /^\d{4}$/.test(raw) ? Number(raw) : NaN;
+  if (!(n >= 2000 && n <= 2100)) fatal(`season "${raw}" (from ${from}) is not a year in 2000–2100`);
+  return { SEASON: n, SEASON_FROM: from };
+})();
+
+/**
+ * ROSTER-LOCKED STATES: a league export owns the roster, so this importer may MATCH a
+ * team but never CREATE one. A rated team or opponent that does not resolve inside the
+ * lock goes to the unresolved list — never a placeholder, never a guess.
+ *
+ * Washington's roster is WHSBLA's. Dry run only for now: --commit is refused below until
+ * a WA write path has been reviewed on its own.
+ */
+const ROSTER_LOCKED = new Set(['WA']);
+const LOCKED_HERE   = STATES.filter(s => ROSTER_LOCKED.has(s));
+if (COMMIT && LOCKED_HERE.length) {
+  console.error(`FATAL: --commit refused for roster-locked ${LOCKED_HERE.join(', ')} — dry run only.`);
+  process.exit(1);
+}
 
 /**
  * NEGATIVE DECISIONS — merges that must never be proposed again.
@@ -168,15 +205,9 @@ const DO_NOT_MERGE = [
     'The name similarity guarantees every future sweep proposes exactly this merge.' },
 ];
 
+// Through the impit client: Cloudflare now 403s axios's TLS fingerprint (see 70b22b2).
 async function ratingsRows(state) {
-  const v = state.laxnumbersId;
-  const { data } = await axios.get(`https://www.laxnumbers.com/ratings/service?y=${SEASON}&v=${v}`, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (compatible; VarsityLaxScraper/1.0)',
-      'Referer': `https://www.laxnumbers.com/ratings.php?y=${SEASON}&v=${v}`,
-    }, timeout: 20000,
-  });
-  return data;
+  return fetchLaxNumbersRatingsRaw(state, SEASON);
 }
 
 (async () => {
@@ -189,6 +220,7 @@ async function ratingsRows(state) {
   const c = await pool.getConnection();
   console.log(`\n  target: ${pool.targetDescription}`);
   console.log(`  mode:   ${COMMIT ? 'COMMIT' : 'DRY RUN (writes nothing)'}`);
+  console.log(`  season: ${SEASON} (${SEASON_FROM})`);
   console.log(`  states: ${STATES.join(', ')}\n`);
 
   const report = { perState: {}, unresolved: new Map() };
@@ -218,6 +250,13 @@ async function ratingsRows(state) {
 
     const slugify = (name, suffix) =>
       norm(name).replace(/\s+/g, '_').slice(0, 56) + (suffix || '');
+
+    // A rated team in a ROSTER-LOCKED feed resolves only inside its own state (the row's
+    // `state`, else the feed's). No global fallback, no stateless placeholder.
+    const lockedSelfId = (t, code) => {
+      const home = t.state || code;
+      return stateIdx.get(home)?.get(norm(t.name)) ?? stateLooseIdx.get(home)?.get(loose(t.name)) ?? null;
+    };
 
     // Dry run SIMULATES creation — assigning a provisional id and indexing it — so the
     // count ladder below reflects what a commit would actually do. Without this every
@@ -280,6 +319,20 @@ async function ratingsRows(state) {
       if (!state) throw new Error(`unknown state ${code}`);
       const rows = await ratingsRows(state);
       ratings.set(code, rows);
+
+      // LOCKED: match only, inside the row's OWN state — the WA feed carries an Oregon
+      // row, and a WA team must never be matched to another state's same-named school.
+      // Unmatched rows are counted here and reported per game in phase 2.
+      if (ROSTER_LOCKED.has(code)) {
+        let matched = 0;
+        for (const t of rows) {
+          if (lockedSelfId(t, code) != null) matched++;
+          else console.log(`      not in roster: "${t.name}" (${t.state || code}) — unresolved, not created`);
+        }
+        console.log(`  ${code}: roster LOCKED — matched ${matched} of ${rows.length} rated team(s), created 0`);
+        continue;
+      }
+
       let created = 0;
       for (const t of rows) {
         // STATE-SCOPED. A global hit on another state's team is a COLLISION, not a match.
@@ -300,16 +353,19 @@ async function ratingsRows(state) {
     for (const code of STATES) {
       const state = getState(code);
       const rows = ratings.get(code);
+      const locked = ROSTER_LOCKED.has(code);
       const st = { teams: rows.length, gpTotal: 0, parsed: 0, resolved: 0, unresolved: 0,
                    matchedExisting: 0, wouldInsert: 0, ot: 0, ff: 0, noResult: 0,
-                   placeholders: 0, gpFromSource: 0, mirrored: 0, ruled: 0, untagged: 0 };
+                   placeholders: 0, gpFromSource: 0, mirrored: 0, ruled: 0, untagged: 0,
+                   matchedBySource: {} };
 
       for (const t of rows) {
         st.gpTotal += t.gp || 0;
         // The rated team itself must exist in OUR roster; if it does not, that is an
         // unresolved ROSTER entry, reported the same way and never invented.
-        const selfId = idx.get(norm(t.name)) ?? looseIdx.get(loose(t.name)) ?? null;
-        const games = await scrapeLaxNumbersTeamGames(state, t.team_nbr);
+        const selfId = locked ? lockedSelfId(t, code)
+                              : idx.get(norm(t.name)) ?? looseIdx.get(loose(t.name)) ?? null;
+        const games = await scrapeLaxNumbersTeamGames(state, t.team_nbr, SEASON);
         st.parsed += games.length;
 
         for (const g of games) {
@@ -333,7 +389,8 @@ async function ratingsRows(state) {
           // one would be the guess this rule exists to forbid. A stateless team renders
           // as a plain opponent name with no out-of-state tag, which is honest: we know
           // who they played, not where they are from.
-          if (selfId && !oppId) {
+          // LOCKED states never create one: the opponent falls through to unresolved.
+          if (selfId && !oppId && !locked) {
             // A RULED origin, or NULL. Never a guess — see data/placeholder-states.json.
             const ruling = RULINGS.get(norm(g.opponentRaw)) || null;
             oppId = await createTeam(g.opponentRaw, ruling ? ruling.state : null, null,
@@ -365,7 +422,12 @@ async function ratingsRows(state) {
                 AND LEAST(home_team_id, away_team_id) = ?
                 AND GREATEST(home_team_id, away_team_id) = ? LIMIT 1`,
             [SEASON, g.date, lo, hi]);
-          if (existing) { st.matchedExisting++; continue; }        // cross-border row already ours
+          if (existing) {                                          // cross-border row already ours
+            st.matchedExisting++;
+            const src = existing.canonical_source ?? 'null';
+            st.matchedBySource[src] = (st.matchedBySource[src] ?? 0) + 1;
+            continue;
+          }
           st.wouldInsert++;
 
           if (COMMIT) {
@@ -391,6 +453,12 @@ async function ratingsRows(state) {
       console.log(`      resolved ${st.resolved}  unresolved ${st.unresolved}  ` +
                   `matched-existing ${st.matchedExisting}  would-insert ${st.wouldInsert}`);
       console.log(`      OT ${st.ot}  forfeits ${st.ff}  no-result ${st.noResult}`);
+      // Locked states only, so an unlocked state's report is unchanged line for line.
+      if (locked) {
+        const by = Object.entries(st.matchedBySource).sort((a, b) => b[1] - a[1])
+          .map(([s, n]) => `${s} ${n}`).join(', ') || 'none';
+        console.log(`      matched-existing by canonical_source: ${by}`);
+      }
     }
 
     // ── THE COUNT LADDER, fourth edition ──────────────────────────────────────

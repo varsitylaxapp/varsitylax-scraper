@@ -55,7 +55,34 @@ async function scrapeLaxNumbers(state = getState(DEFAULT_STATE)) {
 }
 
 /**
- * A team's 2026 games, from /team_info.php?t=<team_nbr>.
+ * The ratings service's rows for one state and season, UNTOUCHED.
+ *
+ * scrapeLaxNumbers() maps rows into ranking entries and drops `team_nbr`, `gp` and
+ * `state`, which the game importer needs: `team_nbr` addresses the team page, `gp` closes
+ * the count ladder, and `state` says which state a rated row belongs to (a feed can carry
+ * a neighbour's teams — Idaho's lists WA, MT and WY schools).
+ *
+ * Same URL shape and Referer as scrapeLaxNumbers(), through the same impit client.
+ */
+async function fetchLaxNumbersRatingsRaw(state, season = SEASON) {
+  if (!state.laxnumbersId) {
+    throw new Error(`[LaxNumbers] ${state.code} has no laxnumbersId configured`);
+  }
+  const qs   = `y=${season}&v=${state.laxnumbersId}`;
+  const rows = await (await fetchLaxNumbers(
+    `https://www.laxnumbers.com/ratings/service?${qs}`,
+    `https://www.laxnumbers.com/ratings.php?${qs}`)).json();
+  if (!Array.isArray(rows)) {
+    throw new Error(`[LaxNumbers] ${state.code} ${season}: ratings service did not return an array`);
+  }
+  return rows;
+}
+
+/**
+ * A team's games for one season, from /team_info.php?t=<team_nbr>.
+ *
+ * `season` defaults to $SEASON (2026), so existing two-argument callers are unchanged.
+ * The importer passes its own --season so the flag reaches the request.
  *
  * HTML, not JSON — there is no service endpoint for games, and no embedded payload. The
  * schedule is a table, parsed the same way the OHSLA scraper parses its pages.
@@ -95,9 +122,9 @@ async function scrapeLaxNumbers(state = getState(DEFAULT_STATE)) {
  *
  * Nothing here writes. Parsing and fetching only.
  */
-async function scrapeLaxNumbersTeamGames(state, teamNbr) {
-  const referer = `https://www.laxnumbers.com/ratings.php?y=${SEASON}&v=${state.laxnumbersId}`;
-  const url = `https://www.laxnumbers.com/team_info.php?y=${SEASON}&t=${teamNbr}`;
+async function scrapeLaxNumbersTeamGames(state, teamNbr, season = SEASON) {
+  const referer = `https://www.laxnumbers.com/ratings.php?y=${season}&v=${state.laxnumbersId}`;
+  const url = `https://www.laxnumbers.com/team_info.php?y=${season}&t=${teamNbr}`;
 
   const html = await (await fetchLaxNumbers(url, referer)).text();
 
@@ -124,7 +151,7 @@ async function scrapeLaxNumbersTeamGames(state, teamNbr) {
     games.push({
       source:      'laxnumbers',
       state:       state.code,
-      season:      SEASON,
+      season,
       date,
       time:        cells[1] || null,
       opponentRaw: opponent,
@@ -140,4 +167,4 @@ async function scrapeLaxNumbersTeamGames(state, teamNbr) {
   return games;
 }
 
-module.exports = { scrapeLaxNumbers, scrapeLaxNumbersTeamGames };
+module.exports = { scrapeLaxNumbers, scrapeLaxNumbersTeamGames, fetchLaxNumbersRatingsRaw };
