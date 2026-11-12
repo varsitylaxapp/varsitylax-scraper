@@ -229,7 +229,7 @@ async function ratingsRows(state) {
 
     // Every team we know about, by both strict and loose name, plus curated aliases.
     const [teams] = await c.execute('SELECT id, slug, name, state FROM teams');
-    const [aliases] = await c.execute('SELECT team_id, alias FROM team_aliases');
+    const [aliases] = await c.execute('SELECT team_id, state, alias FROM team_aliases');
     const idx = new Map(), looseIdx = new Map();
     for (const t of teams) {
       idx.set(norm(t.name), t.id); idx.set(norm(t.slug), t.id);
@@ -255,9 +255,21 @@ async function ratingsRows(state) {
     // state LaxNumbers tags it with. League membership beats geography: Hermiston is an
     // Oregon town in WHSBLA, rostered as hermiston_wa, and tagged OR by LaxNumbers.
     // No global fallback, no stateless placeholder.
+    //
+    // Curated aliases count, scoped by the alias row's own state: a display rename keeps its
+    // old name as an alias ("Mountain View" → mountain_view_wa, now "Mountain View (WA)"),
+    // and the lock must still find it.
+    const stateAliasIdx = new Map(), stateAliasLooseIdx = new Map();
+    for (const a of aliases) {
+      if (!a.state) continue;
+      if (!stateAliasIdx.has(a.state)) { stateAliasIdx.set(a.state, new Map()); stateAliasLooseIdx.set(a.state, new Map()); }
+      stateAliasIdx.get(a.state).set(norm(a.alias), a.team_id);
+      stateAliasLooseIdx.get(a.state).set(loose(a.alias), a.team_id);
+    }
     const lockedSelfId = (t, code) => {
       for (const s of [code, t.state].filter(Boolean)) {
-        const id = stateIdx.get(s)?.get(norm(t.name)) ?? stateLooseIdx.get(s)?.get(loose(t.name));
+        const id = stateIdx.get(s)?.get(norm(t.name)) ?? stateAliasIdx.get(s)?.get(norm(t.name))
+                ?? stateLooseIdx.get(s)?.get(loose(t.name)) ?? stateAliasLooseIdx.get(s)?.get(loose(t.name));
         if (id != null) return id;
       }
       return null;
@@ -382,8 +394,15 @@ async function ratingsRows(state) {
           // states can share a school name — resolving globally is how Idaho's Mountain
           // View became Washington's. A genuine cross-border opponent still resolves,
           // via the fallback.
+          //
+          // LOCKED states also try their own curated aliases before the global fallback: a
+          // display rename ("Mountain View" → "Mountain View (WA)") leaves the old name only
+          // as an alias, and without this step Camas/Skyview/Woodland's "Mountain View"
+          // fell through to Idaho's.
           let oppId = stateIdx.get(code)?.get(norm(g.opponentRaw))
                    ?? stateLooseIdx.get(code)?.get(loose(g.opponentRaw))
+                   ?? (locked ? stateAliasIdx.get(code)?.get(norm(g.opponentRaw))
+                             ?? stateAliasLooseIdx.get(code)?.get(loose(g.opponentRaw)) : null)
                    ?? idx.get(norm(g.opponentRaw))
                    ?? looseIdx.get(loose(g.opponentRaw)) ?? null;
 
