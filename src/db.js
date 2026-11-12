@@ -63,7 +63,10 @@ function parseUrl(raw, varName) {
 let config;
 
 if (target === 'rehearsal') {
-  // A throwaway mysql:8.0.41 container holding a restored prod dump at prod's sql_mode.
+  // A throwaway mysql container holding a restored prod dump at prod's sql_mode, built
+  // at prod's MEASURED version: rehearse-on-prod-schema.sh reads @@version from prod and
+  // refuses to run on a mismatch (8.4.11 since DreamHost's 2026-11-12 upgrade; 8.0.41
+  // before it).
   // It gets its OWN target name rather than borrowing the prod DB_* variables, because
   // a boot line reading `target=PROD host=127.0.0.1` is exactly the misleading output
   // that this project has already been bitten by once. What the line says and where the

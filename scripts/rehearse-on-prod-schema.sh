@@ -43,7 +43,11 @@ W3_TEAMS="${W3_TEAMS:-}"     ; W3_TEAMS27="${W3_TEAMS27:-}"
 W3_GAMES="${W3_GAMES:-}"     ; W3_PO="${W3_PO:-}"
 W3_RANK="${W3_RANK:-}"       ; W3_OR="${W3_OR:-}"
 
-MYSQL_VERSION="8.0.41"            # prod's exact version — not "8.0", not "latest"
+# MYSQL_VERSION is READ FROM PROD in step 1, never pinned here. It was pinned to 8.0.41
+# until DreamHost moved prod to 8.4.11 overnight on 2026-11-11/12, after which this gate
+# kept rehearsing on 8.0.41 and certifying a database prod no longer was. A pin goes stale
+# silently; a measurement cannot.
+MYSQL_VERSION=""
 PROD_SQL_MODE="NO_ENGINE_SUBSTITUTION"   # prod (DreamHost). NOT Railway's STRICT default.
 CONTAINER="vlx-rehearsal"
 PORT=13306
@@ -88,6 +92,16 @@ fs.writeFileSync('$WORK/dbname',process.env.DB_NAME);
 " 2>/dev/null || die "could not read prod credentials from .env"
 DBN=$(cat "$WORK/dbname")
 echo "   source: prod (DB_HOST from .env)   database: $DBN"
+
+# PROD'S VERSION, MEASURED. "8.4.11-0ubuntu0.26.04.1" → "8.4.11": the upstream release is
+# what the mysql image is tagged by; the suffix is the distro's packaging. Anything that
+# does not parse as N.N.N stops the gate — guessing an image would be a pin by another name.
+PROD_VERSION_FULL=$(mysql --defaults-extra-file="$WORK/my.cnf" -N -e "SELECT @@version" 2>"$WORK/ver.err") \
+  || { cat "$WORK/ver.err"; die "could not read @@version from prod"; }
+MYSQL_VERSION=${PROD_VERSION_FULL%%-*}
+[[ "$MYSQL_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+  || die "prod @@version '$PROD_VERSION_FULL' does not parse as N.N.N — refusing to pick an image"
+echo "   prod @@version → $PROD_VERSION_FULL   (rehearsing on mysql:$MYSQL_VERSION)"
 mysqldump --defaults-extra-file="$WORK/my.cnf" \
   --single-transaction --quick --routines --triggers \
   --no-tablespaces --set-gtid-purged=OFF --column-statistics=0 \
@@ -108,7 +122,8 @@ docker rm -f "$CONTAINER" >/dev/null 2>&1
 # where a datadir initialised by 9.4 makes an 8.0 container crash-loop forever.
 docker run -d --name "$CONTAINER" \
   -e MYSQL_ROOT_PASSWORD="$ROOTPW" -e MYSQL_DATABASE="$DBN" \
-  -p "$PORT":3306 "mysql:$MYSQL_VERSION" >/dev/null || die "container did not start"
+  -p "$PORT":3306 "mysql:$MYSQL_VERSION" >/dev/null \
+  || die "container did not start — is mysql:$MYSQL_VERSION (prod's version) published? Do NOT substitute a nearby tag"
 
 mysh() { docker exec -i "$CONTAINER" mysql -uroot -p"$ROOTPW" --default-character-set=utf8mb4 "$@" 2>/dev/null; }
 
@@ -128,7 +143,7 @@ echo
 
 VER=$(mysh -N -e "SELECT VERSION()")
 echo "   SELECT VERSION() → $VER"
-[[ "$VER" == "$MYSQL_VERSION"* ]] || die "expected $MYSQL_VERSION, got $VER — verify BEFORE restoring"
+[ "${VER%%-*}" = "$MYSQL_VERSION" ] || die "container is $VER but prod is $PROD_VERSION_FULL — refusing to rehearse on a different version"
 
 # ── 3. prod's sql_mode, set and VERIFIED ─────────────────────────────────────
 say "3. sql_mode → prod's exact value"

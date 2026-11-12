@@ -185,6 +185,46 @@ its next cycle — no manual warm-up needed.
 
 ## Runbook notes — learned the hard way, 2026-07-28
 
+### ⚠️ Prod moved to MySQL 8.4.11 — 2026-11-12
+
+DreamHost upgraded prod overnight 2026-11-11/12, with no change to `mysql.varsitylaxapp.com`
+or its A record. Measured read-only, inside a rolled-back transaction:
+
+```
+                      2026-11-11 evening              2026-11-12 morning
+@@version             8.0.41-0ubuntu0.24.04.1         8.4.11-0ubuntu0.26.04.1
+@@hostname            iad1-mysql-e2-7b                iad1-mysql-e2-7a     (reverse DNS still says e2-7b)
+@@GLOBAL.sql_mode     NO_ENGINE_SUBSTITUTION          NO_ENGINE_SUBSTITUTION   ← unchanged
+@@time_zone           (never recorded)                SYSTEM, @@system_time_zone = PST
+```
+
+Data was continuous across the move: games 1328 on both sides, and the cron kept writing.
+
+**Session `sql_mode` reads `IGNORE_SPACE,STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION`.**
+That is not 8.4: `IGNORE_SPACE` is `mysql2`'s default client flag (a bare connection shows
+it with `init_connect` empty) and STRICT is ours, from `src/db.js`.
+
+**What 8.4 changed that touches us: nothing found.** Checked against `src/`, `scripts/`
+and the migrations:
+
+- `restrict_fk_on_non_standard_key` is ON. All three foreign keys reference a primary key
+  `id`, so they pass.
+- `VALUES(col)` in `ON DUPLICATE KEY UPDATE` (64 uses) is deprecated but still supported.
+- `default_authentication_plugin` is removed, and nothing reads it. `authentication_policy`
+  is `mysql_native_password`, which DreamHost still enables.
+- No `SQL_CALC_FOUND_ROWS`, no replication statements, no integer display widths beyond
+  `TINYINT(1)`.
+
+**Time zone was never recorded before the move**, so whether it changed is unknown. Every
+`NOW()` in `src/dual-write.js` and the `CURDATE()` in `src/stale-fixtures.js` evaluate in
+PST today.
+
+**The gate was the thing it broke.** `rehearse-on-prod-schema.sh` pinned `mysql:8.0.41`
+and would have kept certifying a version prod no longer ran. It now reads `@@version` from
+prod at step 1, builds that exact upstream release, and refuses to run if the container
+reports anything else. The 8.0.41 references elsewhere in this file are history: they were
+true on the day they were written.
+
 ### ⚠️ prod sql_mode ≠ staging sql_mode
 
 ```
