@@ -216,6 +216,23 @@ means a final was rescheduled and the anchor no longer matches. **Surface the ga
 invent the missing bracket.** Both numbers are reported precisely so a client can say
 "one bracket is unavailable" instead of silently showing three where there are four.
 
+### 3.5 `currentSeason` on `/states` — which season to show
+
+`/states` carries one top-level key besides `states`:
+
+```json
+{ "states": [ ... ], "currentSeason": 2026 }
+```
+
+It is the season a client keys its requests on and labels its screens with, so a season
+change is a server variable (`APP_CURRENT_SEASON`), not an app release. It is always an
+integer year and never absent from a current server; a client must still tolerate it
+missing (servers before 2026-11-12) by falling back to its own compiled season.
+
+It is a pointer, not data: nothing else in `/states` varies by season, and every other
+endpoint still takes `?season=` explicitly. Do not read it as "the season with data" —
+a new season can be current before its first game is scraped (§3.2).
+
 ---
 
 ## 4. Vocabularies
@@ -332,7 +349,7 @@ The authoritative proof for any change is two captures taken minutes apart again
 same database — before and after — which holds the data still so `CHANGED` must be zero.
 
 Fields added under this policy so far: `gameType`, `isForfeit`, `division`, `bracketKey`,
-`round`, `advancesTo`.
+`round`, `advancesTo`, `currentSeason` (`/states`, 2026-11-12).
 
 ---
 
