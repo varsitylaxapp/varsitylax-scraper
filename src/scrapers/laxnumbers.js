@@ -9,8 +9,44 @@ const SEASON = parseInt(process.env.SEASON || '2026');
 // gets 200 from a datacenter. impit impersonates Chrome's handshake with no
 // browser. Same fetch() API; responses are unchanged.
 const client = new Impit({ browser: 'chrome', timeout: 20000 });
+
+// 2026-11-12: after the f79c1a5 deploy every cron run got 403 on all six states, while
+// the api container (same image) got 200. These logs exist to tell an IP block from a
+// fingerprint block on the next failure. Logging only: no retries, no change to the
+// request, and the thrown message stays byte-identical because it lands in scrape_log.
+const https = require('https');
+let outboundIpv4; // one lookup and one log line per process; the cron is a fresh process every run
+function lookupOutboundIpv4() {
+  if (!outboundIpv4) {
+    outboundIpv4 = new Promise((resolve) => {
+      const req = https.get({ host: 'api4.ipify.org', path: '/', family: 4, timeout: 5000 }, (res) => {
+        let b = '';
+        res.on('data', (d) => { b += d; });
+        res.on('end', () => resolve(res.statusCode === 200 ? b.trim() : `unknown (ipify ${res.statusCode})`));
+        res.on('error', (e) => resolve(`unknown (${e.message})`));
+      });
+      req.on('timeout', () => req.destroy(new Error('timeout after 5s')));
+      req.on('error', (e) => resolve(`unknown (${e.message})`));
+    });
+  }
+  return outboundIpv4;
+}
+
 async function fetchLaxNumbers(url, referer) {
   const res = await client.fetch(url, { headers: { Referer: referer } });
+  const h = (k) => res.headers.get(k) ?? '-';
+  if (res.status === 200) {
+    console.log(`[LaxNumbers] 200 cf-ray=${h('cf-ray')}`);
+  } else {
+    // Read the body only when we are about to throw; a 2xx caller still needs it.
+    let body = '(not read: 2xx)';
+    if (!res.ok) {
+      try { body = (await res.text()).slice(0, 300); } catch (e) { body = `(unreadable: ${e.message})`; }
+    }
+    console.error(`[LaxNumbers] ${res.status} ${url} cf-mitigated=${h('cf-mitigated')} ` +
+      `cf-ray=${h('cf-ray')} server=${h('server')} body=${JSON.stringify(body)}`);
+    if (!outboundIpv4) console.error(`[LaxNumbers] outbound IPv4=${await lookupOutboundIpv4()}`);
+  }
   if (!res.ok) throw new Error(`LaxNumbers ${res.status} for ${url}`);
   return res;
 }
