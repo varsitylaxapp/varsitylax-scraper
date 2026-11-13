@@ -58,6 +58,10 @@ curl -s 'localhost:3000/api/v2/rankings/laxnumbers?state=OR' | jq '.rankings | l
 curl -s 'localhost:3000/api/v2/schedule/playoffs?state=WA' | jq '.games | length'
 ```
 
+`/states` publishes `currentSeason` from `APP_CURRENT_SEASON` (unset = 2026), which is
+**not** `SEASON`. To see what the app does in another season, start the API with
+`APP_CURRENT_SEASON=2027`; a value that is not a year in 2000–2100 stops the API booting.
+
 ## Two iOS-side changes this workflow still needs
 
 Neither exists yet. Both are app changes, not backend.

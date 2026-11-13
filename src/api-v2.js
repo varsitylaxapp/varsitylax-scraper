@@ -11,6 +11,22 @@ const { assignBrackets } = require('./playoff-graph');
 
 const router = express.Router();
 const SEASON = () => parseInt(process.env.SEASON || '2026');
+
+// The season the APP should show, published on /states as `currentSeason`. Its own
+// variable, deliberately not SEASON: SEASON is what the scrapers fetch and what a
+// request without ?season= defaults to, and the app changing season must not be coupled
+// to either. Unset means 2026. Set-but-invalid refuses to boot rather than publishing a
+// guess — every installed app would otherwise switch to it on its next launch.
+const CURRENT_SEASON = (() => {
+  const raw = process.env.APP_CURRENT_SEASON;
+  if (raw === undefined || raw === '') return 2026;
+  const n = Number(raw);
+  if (!/^\d{4}$/.test(raw) || n < 2000 || n > 2100) {
+    console.error(`[api] FATAL: APP_CURRENT_SEASON=${JSON.stringify(raw)} is not a year in 2000–2100`);
+    process.exit(1);
+  }
+  return n;
+})();
 const num = v => (v === null || v === undefined ? null : parseFloat(v));
 
 // Resolve ?state= → uppercase code (decision D6: query param on /v2, not a
@@ -171,6 +187,9 @@ router.get('/states', (req, res) => {
           hasPlayoffs:  !!s.capabilities.hasPlayoffs,
         },
       })),
+      // ADDITIVE 2026-11-12. Appended LAST. The season the app keys every request on;
+      // see CURRENT_SEASON above. A pointer to a season, not season-varying data.
+      currentSeason: CURRENT_SEASON,
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -290,7 +309,8 @@ router.get('/schedule/all', async (req, res) => {
 // column, and the final's resolved game id.
 //
 // A SEPARATE ENDPOINT, deliberately not folded into /states. /states is
-// season-less and loaded at launch; formats are (state, division, season)-scoped and
+// season-less and loaded at launch (its one season key, `currentSeason`, says WHICH
+// season the app shows; it carries nothing that varies by season); formats are (state, division, season)-scoped and
 // only wanted when the Playoffs tab renders. Folding them in would bolt
 // season-varying data onto a season-invariant payload and ship bracket structure on
 // every cold launch, including the sessions that never open Playoffs. The client

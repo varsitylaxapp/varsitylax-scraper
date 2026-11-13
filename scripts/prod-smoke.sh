@@ -29,6 +29,9 @@
 set -uo pipefail
 HOST="${1:-https://api.varsitylaxapp.com}"
 SEASON="${SEASON:-2026}"
+# What /states must publish as currentSeason. Its own variable, like APP_CURRENT_SEASON on
+# the server: after a season change, set it to the new year rather than editing a literal.
+EXPECT_CURRENT_SEASON="${EXPECT_CURRENT_SEASON:-2026}"
 
 # endpoint|expected-status|json-key|EXPECTATION  (all four fields REQUIRED)
 #
@@ -54,6 +57,7 @@ SEASON="${SEASON:-2026}"
 # hasRankings:true and no snapshot. That is a designed state, not a failure.
 CHECKS=(
   "/api/v2/states|200|states|=6"
+  "/api/v2/states|200|currentSeason|=$EXPECT_CURRENT_SEASON"
   "/api/v2/health|200|status|=ok"
   "/api/v2/teams?season=$SEASON|200|teams|41"
   "/api/v2/teams?season=$SEASON&state=WA|200|teams|70"
