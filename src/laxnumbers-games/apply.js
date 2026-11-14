@@ -66,6 +66,7 @@ async function recordUnresolved(ctx) {
     console.log(`    ${String(u.count).padStart(3)}×  [${u.state}] ${u.raw}`);
     if (u.ambiguous) console.log(`           AMBIGUOUS: ${u.ambiguous} — refused, not picked`);
     if (u.foreign) console.log(`           FOREIGN ROW, NO RULING: ${u.foreign} — refused (data/foreign-row-rulings.json)`);
+    if (u.number) console.log(`           BY TEAM NUMBER: ${u.number}`);
     u.samples.forEach(s => console.log(`           e.g. ${s}`));
     if (ctx.commit) {
       await c.execute(

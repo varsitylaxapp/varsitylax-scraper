@@ -6,14 +6,14 @@
  * ctx: { c, commit, season, states, rosterLocked: Set, ix: buildIndexes(…),
  *        fakeId, seenThisRun: Set, report: { perState, unresolved: Map } }
  */
-const { getState } = require('../config/states');
-const { norm, loose, RULINGS } = require('./resolve');
+const { getState, listStates } = require('../config/states');
+const { norm, loose, RULINGS, indexRatedByNumber } = require('./resolve');
 const { ratingsRows, teamGames, politeness } = require('./fetch');
 const { createTeam, insertGame } = require('./apply');
 
 async function runPhases(ctx) {
   const { c, season: SEASON, states: STATES, rosterLocked: ROSTER_LOCKED, report } = ctx;
-  const { teamState, candStrict, candLoose, resolveRated, resolveOpponent, byId } = ctx.ix;
+  const { teamState, candStrict, candLoose, resolveRated, resolveOpponentGame, byId } = ctx.ix;
   const label = id => { const t = byId.get(id); return t ? `${t.state ?? '-'}:${t.slug}` : `new#${id}`; };
   // Every rated row LaxNumbers tags with ANOTHER state, and where it went. The both-states
   // rule can attach such a row to a same-named school in the feed's state; listing every
@@ -98,6 +98,18 @@ async function runPhases(ctx) {
     console.log(`  ${code}: roster — created ${created} team(s) from the rated list`);
   }
 
+  // EVERY OTHER FEED, for the opponent lookup only: an opponent link names a team number,
+  // and the number may belong to any covered state, Oregon included. No roster work and
+  // nothing created from these; one request each.
+  for (const st of listStates()) {
+    if (!st.laxnumbersId || ratings.has(st.code)) continue;
+    await politeness();
+    const rows = await ratingsRows(st, SEASON);
+    ratings.set(st.code, rows);
+    console.log(`  ${st.code}: ratings fetched for the opponent lookup only — ${rows.length} rated team(s)`);
+  }
+  const byNbr = indexRatedByNumber(ratings);
+
   // ══ PHASE 2: games, with every roster already in place. ══
   for (const code of STATES) {
     const state = getState(code);
@@ -106,6 +118,7 @@ async function runPhases(ctx) {
     const st = { teams: rows.length, gpTotal: 0, parsed: 0, resolved: 0, unresolved: 0,
                  matchedExisting: 0, wouldInsert: 0, ot: 0, ff: 0, noResult: 0,
                  placeholders: 0, gpFromSource: 0, mirrored: 0, ruled: 0, untagged: 0, ruledOut: 0,
+                 oppByNumber: 0, oppByName: 0, oppNoLink: 0, oppNotInFeeds: 0,
                  matchedBySource: {} };
     const pages = { ok: 0, firstRay: null, lastRay: null };
 
@@ -125,13 +138,16 @@ async function runPhases(ctx) {
         if (g.isForfeit) st.ff++;
         if (g.teamScore === null) { st.noResult++; continue; }   // nothing to import
 
-        // SAME STATE FIRST — teams, then curated aliases (a display rename like
-        // "Mountain View" → "Mountain View (WA)" leaves the old name only as an alias).
-        // Then the whole roster ONLY if exactly one team answers to the name (finding 3:
-        // this was a last-wins global lookup, which is how Idaho's Mountain View became
+        // BY TEAM NUMBER FIRST (resolve.js resolveOpponentGame): the opponent cell's link
+        // names the team, and a refusal there is final. Only an unlinked opponent, or a
+        // number in none of our feeds, falls back to the NAME: same state first — teams,
+        // then curated aliases — then the whole roster ONLY if exactly one team answers
+        // (finding 3: a last-wins global lookup is how Idaho's Mountain View became
         // Washington's). Several → refused as ambiguous, never picked.
-        const oppR = resolveOpponent(g.opponentRaw, code);
+        const oppR = resolveOpponentGame(g, code, byNbr);
         let oppId = oppR.id;
+        if (oppR.by === 'number') st.oppByNumber++;
+        else { st.oppByName++; if (oppR.nameWhy === 'no-link') st.oppNoLink++; else st.oppNotInFeeds++; }
 
         // PLACEHOLDER WITH PROVENANCE. An opponent outside our coverage still played a
         // real game against a team we are importing, and dropping it would hide a real
@@ -140,8 +156,10 @@ async function runPhases(ctx) {
         // one would be the guess this rule exists to forbid. A stateless team renders
         // as a plain opponent name with no out-of-state tag, which is honest: we know
         // who they played, not where they are from.
-        // LOCKED states never create one: the opponent falls through to unresolved.
-        if (selfId && !oppId && !locked && oppR.reason === 'unknown') {
+        // LOCKED states never create one: the opponent falls through to unresolved. Nor
+        // does a refused TEAM NUMBER: that opponent is a rated team we could not attach,
+        // and a placeholder would be the name fallback by another route.
+        if (selfId && !oppId && !locked && oppR.by === 'name' && oppR.reason === 'unknown') {
           // A RULED origin, or NULL. Never a guess — see data/placeholder-states.json.
           const ruling = RULINGS.get(norm(g.opponentRaw)) || null;
           oppId = await createTeam(ctx, g.opponentRaw, ruling ? ruling.state : null, null,
@@ -158,6 +176,7 @@ async function runPhases(ctx) {
           const why = !selfId ? selfR : oppR;
           if (why.reason === 'ambiguous') e.ambiguous = why.candidates.map(label).join(' | ');
           if (why.reason === 'foreign-unruled') e.foreign = `tagged ${why.rowState}; matches ${why.candidates.map(label).join(' | ')} only through the feed state`;
+          if (selfId && oppR.by === 'number') e.number = `t=${oppR.nbr} is "${oppR.ratedName}" in ${oppR.feed}'s feed — ${oppR.reason}; the name was not tried`;
           if (e.samples.length < 2) e.samples.push(`${g.date} ${t.name} ${g.teamScore}-${g.oppScore} ${g.opponentRaw}`);
           report.unresolved.set(key, e);
           continue;
@@ -206,6 +225,8 @@ async function runPhases(ctx) {
     console.log(`      resolved ${st.resolved}  unresolved ${st.unresolved}  ` +
                 `matched-existing ${st.matchedExisting}  would-insert ${st.wouldInsert}  ruled-out ${st.ruledOut}`);
     console.log(`      OT ${st.ot}  forfeits ${st.ff}  no-result ${st.noResult}`);
+    console.log(`      opponents by team number ${st.oppByNumber}, by name ${st.oppByName} ` +
+                `(no link ${st.oppNoLink}, number in no feed ${st.oppNotInFeeds})`);
     // Locked states only, so an unlocked state's report is unchanged line for line.
     if (locked) {
       const by = Object.entries(st.matchedBySource).sort((a, b) => b[1] - a[1])

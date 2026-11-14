@@ -62,6 +62,20 @@ function loadRuledOutGames(rows) {
   return m;
 }
 
+/** team_nbr → [{ feed, row }] over every ratings feed fetched (Map code → rows). */
+function indexRatedByNumber(ratings) {
+  const m = new Map();
+  for (const [feed, rows] of ratings) {
+    for (const row of rows) {
+      if (row.team_nbr == null) continue;
+      const n = Number(row.team_nbr);
+      if (!m.has(n)) m.set(n, []);
+      m.get(n).push({ feed, row });
+    }
+  }
+  return m;
+}
+
 const slugify = (name, suffix) =>
   norm(name).replace(/\s+/g, '_').slice(0, 56) + (suffix || '');
 
@@ -184,11 +198,41 @@ function buildIndexes(teams, aliases, { foreignRulings, ruledOutGames } = {}) {
     return { id: null, reason: 'unknown' };
   };
 
+  /**
+   * An OPPONENT on `code`'s team page, by LaxNumbers TEAM NUMBER first (ruled 2026-11-14).
+   * `byNbr` is indexRatedByNumber() over every feed fetched this run, Oregon's included.
+   *
+   *   linked, and the number is in a feed → resolveRated(that row, that feed): the same
+   *       both-states rule and foreign-row rulings a rated team gets. A REFUSAL STANDS:
+   *       the row is unresolved and the name is NOT tried. The page told us exactly who
+   *       the opponent is; a name match that disagrees would be a guess overruling it.
+   *       A number carried by more than one feed must resolve to one team in every one.
+   *   no link, or a number in none of our feeds → resolveOpponent(name), as before.
+   *
+   * This is the Borah row: "Mountain View" t=12983 is Oregon's mt_view, which the name
+   * rule (Idaho's own teams first) got wrong.
+   */
+  const resolveOpponentGame = (g, code, byNbr) => {
+    const nbr = g.opponentNbr ?? null;
+    const hits = nbr != null ? byNbr.get(nbr) : null;
+    if (!hits || hits.length === 0) {
+      return { ...resolveOpponent(g.opponentRaw, code), by: 'name', nbr,
+               nameWhy: nbr == null ? 'no-link' : 'not-in-feeds' };
+    }
+    const rs = hits.map(h => ({ feed: h.feed, ratedName: h.row.name, ...resolveRated(h.row, h.feed) }));
+    const refused = rs.find(r => r.id == null);
+    const ids = [...new Set(rs.map(r => r.id))];
+    if (!refused && ids.length === 1) return { id: ids[0], by: 'number', nbr, feed: rs[0].feed };
+    if (refused) return { ...refused, id: null, by: 'number', nbr };
+    return { id: null, reason: 'ambiguous', candidates: ids, by: 'number', nbr,
+             feed: rs.map(r => r.feed).join('+') };
+  };
+
   return { idx, looseIdx, byId, teamState, stateIdx, stateLooseIdx,
            stateAliasIdx, stateAliasLooseIdx, candStrict, candLoose, addCand,
-           inState, resolveRated, resolveOpponent, staleForeignRulings,
+           inState, resolveRated, resolveOpponent, resolveOpponentGame, staleForeignRulings,
            ruledOut, staleRuledOut };
 }
 
 module.exports = { norm, loose, RULINGS, DO_NOT_MERGE, slugify, buildIndexes, loadForeignRowRulings,
-                   loadRuledOutGames };
+                   loadRuledOutGames, indexRatedByNumber };

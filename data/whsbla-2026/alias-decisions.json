@@ -279,7 +279,13 @@
         "substitute": "the already-imported LaxNumbers rows for Borah/Capital, which show exactly ONE 12-13 Mountain View fixture on 4/10 and a separate 12-3 on 3/04 — consistent with one game, not two."
       },
       "why_not_a_coincidence": "Two oracles agree. A second 12-13 game against a different Mountain View on the same day would be coincidence; the firsthand account rules it out, and the imported feed shows only one.",
-      "upstream_finding": "LaxNumbers' Idaho page attributes Borah's ROAD game to mountain_view_id — the same bare-name collision this window fixes locally, occurring upstream in the source itself. We cannot fix their page; we can refuse to inherit it. Logged to source_conflicts and to docs/data-quirks.md.",
+      "withdrawn_finding": "LaxNumbers' Idaho page attributes Borah's ROAD game to mountain_view_id — the same bare-name collision this window fixes locally, occurring upstream in the source itself. We cannot fix their page; we can refuse to inherit it. Logged to source_conflicts and to docs/data-quirks.md.",
+      "correction": {
+        "on": "2026-11-14",
+        "by": "Spencer",
+        "finding": "WITHDRAWN. LaxNumbers was right: Borah's page links the 4/10 opponent to t=12983, Oregon's Mountain View, with Borah winning 13-12, the same as OHSLA #243. Our name lookup put it on Idaho's Mountain View. The ruling (one game, keep OHSLA #243) stands. The source_conflicts row logged at the time still carries the old explanation.",
+        "fix": "Opponents resolve by LaxNumbers team number first (src/laxnumbers-games/resolve.js resolveOpponentGame)."
+      },
       "note": "No deletion was made until both oracles reported. The audit carried this pair as an open finding in the meantime rather than letting it be forgotten."
     }
   ]

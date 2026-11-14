@@ -7,7 +7,17 @@
 //
 // EXIT 0 all cases pass · 1 a case failed
 
-const { buildIndexes } = require('../src/laxnumbers-games/resolve');
+// NO NETWORK: the import's two requests are stubbed before anything loads plan.js. A run
+// fetches every feed for the opponent lookup, so an unstubbed run would reach LaxNumbers.
+const FEEDS = new Map(), PAGES = new Map(), FETCHED = [];
+const fetchPath = require.resolve('../src/laxnumbers-games/fetch');
+require.cache[fetchPath] = { id: fetchPath, filename: fetchPath, loaded: true, exports: {
+  ratingsRows: async (state) => { FETCHED.push(state.code); return FEEDS.get(state.code) ?? []; },
+  teamGames:   async (state, nbr) => PAGES.get(nbr) ?? [],
+  politeness:  async () => {},
+} };
+
+const { buildIndexes, indexRatedByNumber } = require('../src/laxnumbers-games/resolve');
 
 let failures = 0;
 const check = (name, ok, detail) => {
@@ -129,6 +139,72 @@ const fakeConn = { execute: async (sql) => sql.includes('FROM teams') ? [teams.f
   try { await importLaxNumbersGames({ c: fakeConn, commit: false, season: 2026, states: [], rosterLocked: new Set(), strictRulings: false }); }
   catch (x) { e = x; }
   check('not strict (the cron, later): warns and carries on', e === null, e && e.message);
+
+  console.log('\n6. opponents by TEAM NUMBER first');
+  const byNbr = indexRatedByNumber(new Map([
+    ['OR', [{ team_nbr: 12983, name: 'Mountain View', state: 'OR' },
+            { team_nbr: 501,   name: 'Liberty',       state: 'WA' }]],
+    ['ID', [{ team_nbr: 10887, name: 'Mountain View', state: 'ID' },
+            { team_nbr: 999,   name: 'Mountain View', state: 'MT' },
+            { team_nbr: 4242,  name: 'Cody',          state: 'WY' }]],
+    ['MT', [{ team_nbr: 4242,  name: 'Cody',          state: 'WY' }]],
+    ['NV', [{ team_nbr: 77,    name: 'Bishop Manogue', state: 'NV' }]],
+    ['AZ', [{ team_nbr: 77,    name: 'Bishop Manogue', state: 'NV' }]],
+  ]));
+  const G = (opponentRaw, opponentNbr, code) => ix.resolveOpponentGame({ opponentRaw, opponentNbr }, code, byNbr);
+  let g = G('Mountain View', 12983, 'ID');
+  check('THE BORAH ROW: "Mountain View" t=12983 on an Idaho page → Oregon\'s mt_view, by number',
+    g.id === 1 && g.by === 'number' && g.feed === 'OR', JSON.stringify(g));
+  check('…where the name alone gives Idaho\'s (the old, wrong answer)', O('Mountain View', 'ID').id === 3);
+  g = G('Mountain View', 10887, 'ID');
+  check('t=10887 → Idaho\'s Mountain View', g.id === 3 && g.by === 'number', JSON.stringify(g));
+  g = G('Mountain View', 999, 'ID');
+  check('REFUSAL STANDS: a number whose row is refused (tagged MT, unruled) is unresolved',
+    g.id === null && g.by === 'number' && g.reason === 'foreign-unruled' && g.nbr === 999, JSON.stringify(g));
+  check('…although the name would have resolved in-state', O('Mountain View', 'ID').id === 3);
+  g = G('Liberty', 501, 'OR');
+  check('REFUSAL STANDS: an ambiguous rated row (Liberty tagged WA in OR\'s feed) → unresolved, no name pick',
+    g.id === null && g.by === 'number' && g.reason === 'ambiguous', JSON.stringify(g));
+  check('…although "Liberty" on an Oregon page names Oregon\'s by name', O('Liberty', 'OR').id === 5);
+  g = G('Mountain View', null, 'ID');
+  check('no link → the name rule', g.id === 3 && g.by === 'name' && g.nameWhy === 'no-link', JSON.stringify(g));
+  g = G('Mater Dei Santa Ana', 31337, 'NV');
+  check('a number in none of our feeds → the name rule', g.id === 9 && g.by === 'name' && g.nameWhy === 'not-in-feeds', JSON.stringify(g));
+  g = G('Bishop Manogue', 77, 'ID');
+  check('a number in two feeds that agree → that team', g.id === 7 && g.by === 'number', JSON.stringify(g));
+  g = G('Cody', 4242, 'ID');
+  check('a number in two feeds where one refuses → refused', g.id === null && g.by === 'number' && g.reason === 'unknown', JSON.stringify(g));
+
+  console.log('\n7. through the phases: a refused number creates no placeholder; the Borah row finds OHSLA\'s game');
+  FEEDS.clear(); PAGES.clear(); FETCHED.length = 0;
+  FEEDS.set('ID', [{ team_nbr: 1, name: 'Borah/Capital', state: 'ID' },
+                   { team_nbr: 999, name: 'Ghost', state: 'MT' }]);
+  FEEDS.set('OR', [{ team_nbr: 12983, name: 'Mountain View', state: 'OR' }]);
+  PAGES.set(1, [
+    { date: '2026-04-10', opponentRaw: 'Mountain View', opponentNbr: 12983, isHome: false, teamScore: 13, oppScore: 12 },
+    { date: '2026-04-12', opponentRaw: 'Ghost',         opponentNbr: 999,   isHome: true,  teamScore: 5,  oppScore: 4 },
+    { date: '2026-04-13', opponentRaw: 'Nowhere Prep',  opponentNbr: null,  isHome: true,  teamScore: 6,  oppScore: 2 },
+  ]);
+  const sql = [];
+  const conn = { execute: async (q, p) => { sql.push(p);
+    return (p && p[2] === 1 && p[3] === 11) ? [[{ id: 243, canonical_source: 'ohsla' }]] : [[]]; } };
+  const ix3 = buildIndexes(teams, aliases, { foreignRulings: [], ruledOutGames: [
+    { season: 2026, date: '2026-04-10', teams: ['mountain_view_id', 'borah_capital_id'], ruling: '017708e' }] });
+  const { runPhases } = require('../src/laxnumbers-games/plan');
+  const ctx = { c: conn, commit: false, season: 2026, states: ['ID'], rosterLocked: new Set(), ix: ix3,
+                fakeId: -1, seenThisRun: new Set(), report: { perState: {}, unresolved: new Map() } };
+  const log = console.log; const out = []; console.log = (...a) => out.push(a.join(' '));
+  try { await runPhases(ctx); } finally { console.log = log; }
+  const st = ctx.report.perState.ID;
+  check('every other feed is fetched for the lookup, Oregon included',
+    ['OR', 'WA', 'AZ', 'MT', 'NV'].every(c => FETCHED.includes(c)) && FETCHED.filter(c => c === 'ID').length === 1, FETCHED.join(','));
+  check('Borah 4/10 → matched OHSLA\'s game (mt_view id 1 v borah id 11); the guard does not fire',
+    st.matchedExisting === 1 && st.ruledOut === 0, JSON.stringify(st));
+  check('the refused number (Ghost, t=999): unresolved, NO placeholder', st.unresolved === 1 && ctx.report.unresolved.has('ID|Ghost')
+    && /t=999/.test(ctx.report.unresolved.get('ID|Ghost').number), JSON.stringify([...ctx.report.unresolved.values()]));
+  check('an unlinked unknown opponent still gets its placeholder (unchanged)', st.placeholders === 1 && st.wouldInsert === 1, JSON.stringify(st));
+  check('counts: 2 by number, 1 by name (no link)', st.oppByNumber === 2 && st.oppByName === 1 && st.oppNoLink === 1, JSON.stringify(st));
+
 console.log(`\n${failures ? `FAIL — ${failures} check(s) failed` : 'PASS — all checks'}`);
 process.exit(failures ? 1 : 0);
 })();

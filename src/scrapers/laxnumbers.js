@@ -170,7 +170,8 @@ async function fetchLaxNumbersRatingsRaw(state, season) {
  * wrong:
  *
  *   "N - N"        360   an ordinary result
- *   "N - N OT"      13   OVERTIME, so is_overtime comes free
+ *   "N - N OT"      13   OVERTIME, so is_overtime comes free ("N - N 2OT" too, seen
+ *                        once in 2026; any "<n>OT" counts)
  *   "-"              5   no result: scheduled, cancelled or never played
  *   "N - N (F)"      1   FORFEIT, so is_forfeit comes free too
  *
@@ -182,13 +183,30 @@ async function scrapeLaxNumbersTeamGames(state, teamNbr, season, opts = {}) {
   const url = `https://www.laxnumbers.com/team_info.php?y=${season}&t=${teamNbr}`;
 
   const html = await (await fetchLaxNumbers(url, referer, opts)).text();
+  return parseLaxNumbersTeamGames(html, state, season);
+}
 
+/**
+ * The table parse behind scrapeLaxNumbersTeamGames, split out so fixtures can test it
+ * without a request.
+ *
+ * `opponentNbr` is the LaxNumbers team number from the opponent cell's link
+ * (team_info.php?…&t=<n>), or null when the cell has no link. It is the page's own
+ * identity for the opponent, so the import resolves by it before it ever reads the name
+ * (2026-11-13: across 1,862 linked rows in five states it never disagreed with a correct
+ * name match, and the one disagreement was our name lookup's error, not the page's).
+ *
+ * Overtime may carry a count: "9 - 8 2OT" (Borah/Capital v Boise, 2026-04-21, the only
+ * such cell in 1,932 rows). Any "<n>OT" is overtime.
+ */
+function parseLaxNumbersTeamGames(html, state, season) {
   const cellText = c => c.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ')
                          .replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
 
   const games = [];
   for (const tr of html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
-    const cells = [...tr[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map(c => cellText(c[1]));
+    const raw = [...tr[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map(c => c[1]);
+    const cells = raw.map(cellText);
     if (cells.length < 5) continue;
     const date = cells[0];
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;     // header and layout rows
@@ -199,9 +217,10 @@ async function scrapeLaxNumbersTeamGames(state, teamNbr, season, opts = {}) {
     const isAway   = /^at\s+/i.test(rawOpponent);
     const opponent = rawOpponent.replace(/^(?:at|vs|@)\s+/i, '').trim();
     if (!opponent) continue;
+    const link = raw[2].match(/team_info\.php\?[^"'>]*?\bt=(\d+)/i);
 
-    // "18 - 5", optionally " OT" or " (F)". This team's score first.
-    const m = cells[4].match(/^(\d+)\s*-\s*(\d+)\s*(OT|\(F\))?$/i);
+    // "18 - 5", optionally " OT", " 2OT" or " (F)". This team's score first.
+    const m = cells[4].match(/^(\d+)\s*-\s*(\d+)\s*(\d*OT|\(F\))?$/i);
     const suffix = (m && m[3] ? m[3] : '').toUpperCase();
     games.push({
       source:      'laxnumbers',
@@ -210,11 +229,12 @@ async function scrapeLaxNumbersTeamGames(state, teamNbr, season, opts = {}) {
       date,
       time:        cells[1] || null,
       opponentRaw: opponent,
+      opponentNbr: link ? Number(link[1]) : null,
       isHome:      !isAway,
       isNeutralHint: /^vs\s+/i.test(rawOpponent),
       teamScore:   m ? parseInt(m[1]) : null,
       oppScore:    m ? parseInt(m[2]) : null,
-      isOvertime:  suffix === 'OT',
+      isOvertime:  /OT$/.test(suffix),
       isForfeit:   suffix === '(F)',
       scrapedAt:   new Date(),
     });
@@ -222,4 +242,5 @@ async function scrapeLaxNumbersTeamGames(state, teamNbr, season, opts = {}) {
   return games;
 }
 
-module.exports = { scrapeLaxNumbers, scrapeLaxNumbersTeamGames, fetchLaxNumbersRatingsRaw };
+module.exports = { scrapeLaxNumbers, scrapeLaxNumbersTeamGames, parseLaxNumbersTeamGames,
+                   fetchLaxNumbersRatingsRaw };

@@ -9,7 +9,7 @@
       "ruling": "017708e",
       "ruledBy": "Spencer",
       "ruledOn": "2026-08-10",
-      "why": "LaxNumbers' Idaho page attributes Borah's ROAD game at Bend to Idaho's Mountain View. The real game is Oregon's mt_view at home, already recorded by OHSLA (#243); the LaxNumbers row (#96806) was deleted by this ruling. See docs/data-quirks.md."
+      "why": "Borah's ROAD game at Bend, a 13-12 Borah win at Oregon's mt_view, already recorded by OHSLA (#243). Our NAME lookup attached it to Idaho's Mountain View; LaxNumbers' page links the right team (t=12983, Oregon's feed). The resulting row (#96806) was deleted by this ruling. Kept as a guard now that opponents resolve by team number. Corrected 2026-11-14; see docs/data-quirks.md."
     }
   ]
 }

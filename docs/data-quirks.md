@@ -190,25 +190,33 @@ Reconcile PER TEAM — that is what turned "13 ≠ 12, still open" into a closed
 Arizona and Montana happen to have neither exclusion in 2026, so their totals match
 exactly. That agreement is a coincidence of the data, not a property of the source.
 
-## LaxNumbers' Idaho page mis-attributes Borah's road games
+## Borah/Capital at Mountain View, 2026-04-10: our name lookup, not LaxNumbers
 
-**Found 2026-08-10, window #5. Upstream, in the source — not ours to fix.**
+**Found 2026-08-10, window #5. CORRECTED 2026-11-14: the error was ours.**
 
-Borah/Capital travelled to Bend on 2026-04-10 and lost 12–13 to Oregon's Mountain
-View. LaxNumbers' Idaho feed records that game against **Idaho's** Mountain View
-(`mountain_view_id`, Meridian) instead — the same bare-name collision this window fixed
-in our own resolver, occurring one layer up.
+Borah/Capital travelled to Bend on 2026-04-10 and **beat** Oregon's Mountain View 13–12
+(OHSLA #243: `mt_view` 12, `borah_capital_id` 13). An earlier version of this section
+said Borah lost 12–13 and that LaxNumbers' Idaho page recorded the game against Idaho's
+Mountain View (`mountain_view_id`, Meridian). **Both were wrong.**
 
-The tell is that "Mountain View" is a name three schools answer to across OR/WA/ID, and a
-single-state feed resolving a road opponent has no more state context than our alias map
-had. We cannot correct their page. We can decline to inherit it: `game_source_priority`
-puts OHSLA (100) above LaxNumbers (50), and OHSLA is the league whose own member reported
-the trip.
+Borah's LaxNumbers page shows "at Mountain View, 13 - 12", and the opponent cell links
+`team_info.php?y=2026&t=12983`, which is the team number of **Oregon's** Mountain View in
+LaxNumbers' Oregon feed. Idaho's Mountain View (t=10887) has no game that day. LaxNumbers
+had the right team and the right score.
 
-Settled by two oracles, recorded in `alias-decisions.json` as `borah-mtview-2026-04-10`:
-a firsthand account (Spencer — his son's club, that weekend: three games Apr 10–11,
-matching OHSLA's three fixtures exactly) and the imported LaxNumbers rows themselves,
-which show exactly one 12–13 Mountain View fixture that day.
+The mistake was our resolver reading only the opponent's NAME. "Mountain View" is a name
+three schools answer to across OR/WA/ID, and the name rule looks in the page's own state
+first, so on an Idaho page it picked Idaho's. That created LaxNumbers row #96806, which
+ruling `borah-mtview-2026-04-10` (commit 017708e) deleted in favour of OHSLA #243. The
+ruling's outcome (one game, OHSLA's) stands; only its explanation changed.
 
-**If a future import re-creates it**, that is not a regression in our code — it is the
-upstream page unchanged. `scripts/cross-state-audit.js` check (C) will surface it.
+**What prevents it now:** the import resolves an opponent by the LaxNumbers team number in
+its link first (`resolveOpponentGame` in `src/laxnumbers-games/resolve.js`). The number is
+looked up across all six feeds, Oregon's included. A refused number is never retried by
+name. The name rule is used only for an unlinked opponent or a number in none of our feeds
+(55 of 1,917 scored rows in 2026, none ambiguous). The 2026-04-10 entry in
+`data/ruled-out-games.json` stays as a guard.
+
+**If a future import re-creates `mountain_view_id` v Borah on 2026-04-10**, that IS a
+regression in our code. The ruled-out entry refuses it, and
+`scripts/cross-state-audit.js` check (C) will surface it.
