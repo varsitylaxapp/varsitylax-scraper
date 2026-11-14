@@ -59,6 +59,9 @@ CHECKS=(
   "/api/v2/states|200|states|=6"
   "/api/v2/states|200|currentSeason|=$EXPECT_CURRENT_SEASON"
   "/api/v2/health|200|status|=ok"
+  # 200 or 503 are both a WORKING endpoint: 503 means LaxNumbers has failed 3+ runs in a
+  # row, which is the monitor's alarm, not a deploy failure. The shape is what is checked.
+  "/api/v2/health/laxnumbers|200,503|states|=6"
   "/api/v2/teams?season=$SEASON|200|teams|41"
   "/api/v2/teams?season=$SEASON&state=WA|200|teams|70"
   "/api/v2/rankings/laxnumbers?season=$SEASON|200|rankings|41"
@@ -155,7 +158,8 @@ else:
         print(f'SCALAR {k} needs = or ~, not a minimum'); raise SystemExit
     print(str(v)[:60])
 " 2>/dev/null)
-  if [ "$code" != "$want" ]; then
+  # `want` may list several codes, comma-separated ("200,503").
+  if [[ ",$want," != *",$code,"* ]]; then
     printf "  FAIL  %-52s %s (want %s)  %s\n" "$path" "$code" "$want" "$(printf '%s' "$body" | head -c 70)"
     fail=$((fail+1))
   elif [ -z "$detail" ] || [[ "$detail" == MISSING* ]] || [[ "$detail" == UNPARSEABLE ]] || [[ "$detail" == TOO\ FEW* ]] || [[ "$detail" == EXPECTED* ]] || [[ "$detail" == SCALAR* ]]; then

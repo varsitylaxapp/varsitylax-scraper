@@ -21,7 +21,7 @@
 #   ./scripts/capture-payloads.sh /tmp/after
 #   node scripts/payload-diff.js /tmp/before /tmp/after
 #
-# /api/v2/health is deliberately NOT captured: it carries live timestamps and would
+# /api/v2/health and /api/v2/health/laxnumbers are deliberately NOT captured: it carries live timestamps and would
 # differ on every run, training the reader to ignore diffs.
 
 set -euo pipefail

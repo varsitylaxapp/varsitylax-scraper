@@ -6,7 +6,8 @@
 // as { slug, name }.
 const express = require('express');
 const db = require('./db');
-const { DEFAULT_STATE, isValidState, listStates } = require('./config/states');
+const { DEFAULT_STATE, isValidState, listStates, enabledStates } = require('./config/states');
+const scrapeHealth = require('./scrape-health');
 const { assignBrackets } = require('./playoff-graph');
 
 const router = express.Router();
@@ -209,6 +210,35 @@ router.get('/health', async (req, res) => {
       lastSnapshot: pacificISO(snap.lastSnapshot),
     });
   } catch (err) { res.status(500).json({ status: 'error', message: err.message }); }
+});
+
+// ── GET /api/v2/health/laxnumbers ────────────────────────────────────────────
+// For the uptime monitor, not the app. 503 once any rankings state's LaxNumbers request
+// has failed THRESHOLD (3) runs in a row; 200 otherwise. The body is the same either way.
+// A SEPARATE endpoint so /health's contract (status "ok", checked by prod-smoke) does not
+// change: a LaxNumbers block is a data-source outage, not an API outage.
+// Not in payload-baseline/: live timestamps, like /health. See src/scrape-health.js.
+router.get('/health/laxnumbers', async (req, res) => {
+  try {
+    const states = await scrapeHealth.laxnumbersHealth(db, enabledStates('hasRankings').map(s => s.code));
+    const failing = states.filter(s => s.consecutiveFailedRuns >= scrapeHealth.THRESHOLD).map(s => s.state);
+    res.status(failing.length ? 503 : 200).json({
+      status: failing.length ? 'failing' : 'ok',
+      threshold: scrapeHealth.THRESHOLD,
+      failing,
+      states: states.map(s => ({
+        state: s.state,
+        consecutiveFailedRuns: s.consecutiveFailedRuns,
+        lastSuccessAt: pacificISO(s.lastSuccessAt),
+        lastErrorAt: pacificISO(s.lastErrorAt),
+        lastErrorHttpStatus: s.lastErrorHttpStatus,
+      })),
+    });
+  } catch (err) {
+    // No error text in this public body either; the detail goes to the log.
+    console.error('[health/laxnumbers]', err);
+    res.status(500).json({ error: 'health check failed' });
+  }
 });
 
 // ── GET /api/v2/rankings/laxnumbers | laxpower ──────────────────────────────

@@ -394,6 +394,34 @@ client should always send `state` explicitly.
 
 ---
 
+## 9.1 `/health/laxnumbers` — for the uptime monitor, not the app
+
+`GET /api/v2/health/laxnumbers` reports, per rankings state, how many cron runs in a row
+the LaxNumbers request has failed. **503 when any state reaches 3**, 200 otherwise; the
+body is the same shape either way:
+
+```json
+{ "status": "ok", "threshold": 3, "failing": [],
+  "states": [ { "state": "OR", "consecutiveFailedRuns": 0,
+                "lastSuccessAt": "2026-11-13T10:01:12-08:00",
+                "lastErrorAt": "2026-11-12T16:04:40-08:00",
+                "lastErrorHttpStatus": 403 } ] }
+```
+
+`lastErrorHttpStatus` is the HTTP status of the most recent failed request, or `null`
+when that failure had none (a timeout, a dropped connection) or there has been no
+failure. **The body carries no error text**: the endpoint is public, and the full message
+stays in `scrape_log` and the cron's logs. If the check itself cannot read the database
+it returns 500 `{ "error": "health check failed" }`, again with no detail.
+
+A run counts as failed when its `scrape_log` row for the rankings request has status
+`error`; `partial` and `skipped` are not failures. Timestamps carry real offsets, like
+`/health`. Separate from `/health` on purpose: a LaxNumbers block is a source outage,
+and `/health`'s contract (`status: "ok"`) does not change. Not part of the app contract,
+and absent from `payload-baseline/` (live data).
+
+---
+
 ## 10. v1 (`/api`) — legacy
 
 Sunsetting ~Oct 2026. **A new client must not use it.** Documented only because it is
