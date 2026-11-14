@@ -134,6 +134,7 @@
  */
 const pool = require('../src/db');
 const { importLaxNumbersGames, recordUnresolved } = require('../src/laxnumbers-games');
+const { rosterLockedStates } = require('../src/config/states');
 
 const COMMIT  = process.argv.includes('--commit');
 const STAGE_C = process.argv.includes('--stage-c');
@@ -164,10 +165,11 @@ const { SEASON, SEASON_FROM } = (() => {
  * team but never CREATE one. A rated team or opponent that does not resolve inside the
  * lock goes to the unresolved list — never a placeholder, never a guess.
  *
- * Washington's roster is WHSBLA's. Dry run only for now: --commit is refused below until
- * a WA write path has been reviewed on its own.
+ * Which states are locked is the registry's `rosterLocked` (src/config/states.js):
+ * Oregon (OHSLA) and Washington (WHSBLA). Dry run only for now: --commit is refused below
+ * until a write path for a locked state has been reviewed on its own.
  */
-const ROSTER_LOCKED = new Set(['WA']);
+const ROSTER_LOCKED = new Set(rosterLockedStates());
 const LOCKED_HERE   = STATES.filter(s => ROSTER_LOCKED.has(s));
 if (COMMIT && LOCKED_HERE.length) {
   console.error(`FATAL: --commit refused for roster-locked ${LOCKED_HERE.join(', ')} — dry run only.`);

@@ -6,6 +6,21 @@
 // is a deploy, not a row insert. Per-SEASON data — which division a team is in —
 // lives in the DB, in team_seasons.division_id.
 //
+// GAME INGESTION KEYS (2026-11):
+//   rosterLocked  true: a curated source owns the roster, so no importer may CREATE a
+//                 team in this state — match only; unknown names go to
+//                 unresolved_aliases. (Read by scripts/import-laxnumbers-games.js.)
+//   liveGames     the recurring game job's source for this state, or null for none:
+//                 { source: 'laxnumbers', role: 'primary' | 'fill' }. 'fill' = another
+//                 source has authority; LaxNumbers only fills gaps.
+// Neither key reaches the API: /states lists its fields explicitly.
+//
+// The job is ENABLED per state by LAXNUMBERS_GAMES_STATES (parseLiveGamesStates below).
+// That is an exception to the rule that follows, and a safe one: the registry says what
+// a state's source IS; the env only switches an already-declared job on. A missing or
+// empty variable means OFF — the failure mode of the variable vanishing is "no new
+// writes", not "the wrong writes", which is the WRITE_MODE lesson.
+//
 // NOT env-driven, deliberately: WRITE_MODE went missing from Railway's variables
 // on 2026-07-11 and silently reverted dual-write to legacy for two days
 // (db/migrate/MIGRATION-STATUS.md). A registry in git cannot drift or go absent.
@@ -60,6 +75,11 @@ const STATES = {
       label: 'OHSLA',
     },
 
+    // Oregon's games are OHSLA's alone. No LaxNumbers game job, and its roster is
+    // curated, so no importer may create an Oregon team.
+    rosterLocked: true,
+    liveGames:    null,
+
     playoffs: null,   // PlayoffFormat extraction is a later phase
   },
 
@@ -94,6 +114,10 @@ const STATES = {
     regions: null,
     capabilities: { hasRankings: true, hasSchedules: true, hasPlayoffs: true },
     scheduleSource: { kind: 'export', host: null, group: null, lgId: '50652', label: 'WHSBLA' },
+    // WHSBLA's export owns the roster and every value it holds; LaxNumbers only fills
+    // gaps (missing scores) and adds games the export lacks.
+    rosterLocked: true,
+    liveGames:    { source: 'laxnumbers', role: 'fill' },
     playoffs: null,
   },
 
@@ -116,6 +140,7 @@ const STATES = {
     regions: null,
     capabilities: { hasRankings: true, hasSchedules: true, hasPlayoffs: false },
     scheduleSource: null, playoffs: null,
+    rosterLocked: false, liveGames: { source: 'laxnumbers', role: 'primary' },
   },
   ID: {
     code: 'ID', name: 'Idaho', enabled: true, slugSuffix: '_id',
@@ -131,6 +156,7 @@ const STATES = {
     regions: null,
     capabilities: { hasRankings: true, hasSchedules: true, hasPlayoffs: false },
     scheduleSource: null, playoffs: null,
+    rosterLocked: false, liveGames: { source: 'laxnumbers', role: 'primary' },
   },
   MT: {
     code: 'MT', name: 'Montana', enabled: true, slugSuffix: '_mt',
@@ -141,6 +167,7 @@ const STATES = {
     regions: null,
     capabilities: { hasRankings: true, hasSchedules: true, hasPlayoffs: false },
     scheduleSource: null, playoffs: null,
+    rosterLocked: false, liveGames: { source: 'laxnumbers', role: 'primary' },
   },
   NV: {
     code: 'NV', name: 'Nevada', enabled: true, slugSuffix: '_nv',
@@ -154,6 +181,7 @@ const STATES = {
     regions: null,
     capabilities: { hasRankings: true, hasSchedules: true, hasPlayoffs: false },
     scheduleSource: null, playoffs: null,
+    rosterLocked: false, liveGames: { source: 'laxnumbers', role: 'primary' },
   },
 };
 
@@ -188,7 +216,38 @@ function defaultDivision(code) {
   return divisionsFor(code).find(d => d.isDefault) || null;
 }
 
+/** States whose roster no importer may add to. Registry order. */
+function rosterLockedStates() {
+  return listStates().filter(s => s.rosterLocked === true).map(s => s.code);
+}
+
+/** States that declare a recurring game job from `source`. Registry order. */
+function liveGameStates(source) {
+  return listStates().filter(s => s.liveGames && s.liveGames.source === source);
+}
+
+/**
+ * LAXNUMBERS_GAMES_STATES ("WA,ID" …) → state codes, validated. Unset or blank → [] (off).
+ * Throws on an unknown code, a duplicate, or a state with no declared LaxNumbers job
+ * (Oregon) — a typo must stop the process at boot, not silently skip a state.
+ */
+function parseLiveGamesStates(raw, source = 'laxnumbers') {
+  const codes = String(raw ?? '').split(',').map(x => x.trim().toUpperCase()).filter(Boolean);
+  const seen = new Set();
+  for (const code of codes) {
+    const s = getState(code);
+    if (!s) throw new Error(`LAXNUMBERS_GAMES_STATES: unknown state "${code}"`);
+    if (!s.liveGames || s.liveGames.source !== source) {
+      throw new Error(`LAXNUMBERS_GAMES_STATES: ${code} declares no ${source} game job`);
+    }
+    if (seen.has(code)) throw new Error(`LAXNUMBERS_GAMES_STATES: ${code} listed twice`);
+    seen.add(code);
+  }
+  return codes;
+}
+
 module.exports = {
   DEFAULT_STATE, STATES,
   getState, isValidState, listStates, enabledStates, divisionsFor, defaultDivision,
+  rosterLockedStates, liveGameStates, parseLiveGamesStates,
 };
