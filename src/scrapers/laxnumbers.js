@@ -32,11 +32,16 @@ function lookupOutboundIpv4() {
   return outboundIpv4;
 }
 
-async function fetchLaxNumbers(url, referer) {
+// `quiet` is for bulk callers (one request per team page): a 200 is not logged here and
+// `onOk(cfRay)` hands the ray to the caller, which prints one summary line instead.
+// A non-200 is ALWAYS logged in full, quiet or not — that is the evidence the 403 work
+// exists to keep.
+async function fetchLaxNumbers(url, referer, { quiet = false, onOk } = {}) {
   const res = await client.fetch(url, { headers: { Referer: referer } });
   const h = (k) => res.headers.get(k) ?? '-';
   if (res.status === 200) {
-    console.log(`[LaxNumbers] 200 cf-ray=${h('cf-ray')}`);
+    if (!quiet) console.log(`[LaxNumbers] 200 cf-ray=${h('cf-ray')}`);
+    if (onOk) onOk(h('cf-ray'));
   } else {
     // Read the body only when we are about to throw; a 2xx caller still needs it.
     let body = '(not read: 2xx)';
@@ -56,6 +61,18 @@ async function fetchLaxNumbers(url, referer) {
 //
 // `state` is a record from config/states.js. Defaults to Oregon so any existing
 // zero-arg caller is unchanged.
+/**
+ * A season the caller must state. The game import's fetchers take no default: a missing
+ * season silently meaning 2026 is how a 2027 run would scrape the wrong year and report
+ * success. Thrown before any request is made.
+ */
+function requireSeason(season, fn) {
+  if (!Number.isInteger(season) || season < 2000 || season > 2100) {
+    throw new Error(`[LaxNumbers] ${fn}: season must be a year in 2000–2100, got ${JSON.stringify(season)}`);
+  }
+  return season;
+}
+
 async function scrapeLaxNumbers(state = getState(DEFAULT_STATE)) {
   if (!state.laxnumbersId) {
     throw new Error(`[LaxNumbers] ${state.code} has no laxnumbersId configured`);
@@ -100,7 +117,8 @@ async function scrapeLaxNumbers(state = getState(DEFAULT_STATE)) {
  *
  * Same URL shape and Referer as scrapeLaxNumbers(), through the same impit client.
  */
-async function fetchLaxNumbersRatingsRaw(state, season = SEASON) {
+async function fetchLaxNumbersRatingsRaw(state, season) {
+  requireSeason(season, 'fetchLaxNumbersRatingsRaw');
   if (!state.laxnumbersId) {
     throw new Error(`[LaxNumbers] ${state.code} has no laxnumbersId configured`);
   }
@@ -117,8 +135,8 @@ async function fetchLaxNumbersRatingsRaw(state, season = SEASON) {
 /**
  * A team's games for one season, from /team_info.php?t=<team_nbr>.
  *
- * `season` defaults to $SEASON (2026), so existing two-argument callers are unchanged.
- * The importer passes its own --season so the flag reaches the request.
+ * `season` is REQUIRED (no $SEASON default): the game import passes its own season.
+ * `opts` ({ quiet, onOk }) is passed through to the request; see fetchLaxNumbers.
  *
  * HTML, not JSON — there is no service endpoint for games, and no embedded payload. The
  * schedule is a table, parsed the same way the OHSLA scraper parses its pages.
@@ -152,24 +170,43 @@ async function fetchLaxNumbersRatingsRaw(state, season = SEASON) {
  * wrong:
  *
  *   "N - N"        360   an ordinary result
- *   "N - N OT"      13   OVERTIME, so is_overtime comes free
+ *   "N - N OT"      13   OVERTIME, so is_overtime comes free ("N - N 2OT" too, seen
+ *                        once in 2026; any "<n>OT" counts)
  *   "-"              5   no result: scheduled, cancelled or never played
  *   "N - N (F)"      1   FORFEIT, so is_forfeit comes free too
  *
  * Nothing here writes. Parsing and fetching only.
  */
-async function scrapeLaxNumbersTeamGames(state, teamNbr, season = SEASON) {
+async function scrapeLaxNumbersTeamGames(state, teamNbr, season, opts = {}) {
+  requireSeason(season, 'scrapeLaxNumbersTeamGames');
   const referer = `https://www.laxnumbers.com/ratings.php?y=${season}&v=${state.laxnumbersId}`;
   const url = `https://www.laxnumbers.com/team_info.php?y=${season}&t=${teamNbr}`;
 
-  const html = await (await fetchLaxNumbers(url, referer)).text();
+  const html = await (await fetchLaxNumbers(url, referer, opts)).text();
+  return parseLaxNumbersTeamGames(html, state, season);
+}
 
+/**
+ * The table parse behind scrapeLaxNumbersTeamGames, split out so fixtures can test it
+ * without a request.
+ *
+ * `opponentNbr` is the LaxNumbers team number from the opponent cell's link
+ * (team_info.php?…&t=<n>), or null when the cell has no link. It is the page's own
+ * identity for the opponent, so the import resolves by it before it ever reads the name
+ * (2026-11-13: across 1,862 linked rows in five states it never disagreed with a correct
+ * name match, and the one disagreement was our name lookup's error, not the page's).
+ *
+ * Overtime may carry a count: "9 - 8 2OT" (Borah/Capital v Boise, 2026-04-21, the only
+ * such cell in 1,932 rows). Any "<n>OT" is overtime.
+ */
+function parseLaxNumbersTeamGames(html, state, season) {
   const cellText = c => c.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ')
                          .replace(/&amp;/g, '&').replace(/\s+/g, ' ').trim();
 
   const games = [];
   for (const tr of html.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)) {
-    const cells = [...tr[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map(c => cellText(c[1]));
+    const raw = [...tr[1].matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)].map(c => c[1]);
+    const cells = raw.map(cellText);
     if (cells.length < 5) continue;
     const date = cells[0];
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) continue;     // header and layout rows
@@ -180,9 +217,10 @@ async function scrapeLaxNumbersTeamGames(state, teamNbr, season = SEASON) {
     const isAway   = /^at\s+/i.test(rawOpponent);
     const opponent = rawOpponent.replace(/^(?:at|vs|@)\s+/i, '').trim();
     if (!opponent) continue;
+    const link = raw[2].match(/team_info\.php\?[^"'>]*?\bt=(\d+)/i);
 
-    // "18 - 5", optionally " OT" or " (F)". This team's score first.
-    const m = cells[4].match(/^(\d+)\s*-\s*(\d+)\s*(OT|\(F\))?$/i);
+    // "18 - 5", optionally " OT", " 2OT" or " (F)". This team's score first.
+    const m = cells[4].match(/^(\d+)\s*-\s*(\d+)\s*(\d*OT|\(F\))?$/i);
     const suffix = (m && m[3] ? m[3] : '').toUpperCase();
     games.push({
       source:      'laxnumbers',
@@ -191,11 +229,12 @@ async function scrapeLaxNumbersTeamGames(state, teamNbr, season = SEASON) {
       date,
       time:        cells[1] || null,
       opponentRaw: opponent,
+      opponentNbr: link ? Number(link[1]) : null,
       isHome:      !isAway,
       isNeutralHint: /^vs\s+/i.test(rawOpponent),
       teamScore:   m ? parseInt(m[1]) : null,
       oppScore:    m ? parseInt(m[2]) : null,
-      isOvertime:  suffix === 'OT',
+      isOvertime:  /OT$/.test(suffix),
       isForfeit:   suffix === '(F)',
       scrapedAt:   new Date(),
     });
@@ -203,4 +242,5 @@ async function scrapeLaxNumbersTeamGames(state, teamNbr, season = SEASON) {
   return games;
 }
 
-module.exports = { scrapeLaxNumbers, scrapeLaxNumbersTeamGames, fetchLaxNumbersRatingsRaw };
+module.exports = { scrapeLaxNumbers, scrapeLaxNumbersTeamGames, parseLaxNumbersTeamGames,
+                   fetchLaxNumbersRatingsRaw };

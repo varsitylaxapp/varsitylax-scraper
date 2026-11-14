@@ -169,11 +169,11 @@ async function verifyPair(p) {
     // resolved apart — so there is no disagreement between SOURCES to record, and writing
     // `owner_source=ohsla other_source=ohsla` 36 times would bury the one row that matters.
     //
-    // Borah 4/10 is the one that matters: OHSLA says Oregon's mt_view hosted Borah,
-    // LaxNumbers' Idaho page says Idaho's mountain_view_id did. Ruled ONE game by two
-    // oracles (alias-decisions.json `borah-mtview-2026-04-10`). The losing row is deleted,
-    // and what it claimed is kept — the upstream page still says it, and a future import
-    // that re-creates it must be recognisable as their error rather than ours.
+    // Borah 4/10 is the one that matters: OHSLA says Oregon's mt_view hosted Borah, and
+    // our LaxNumbers row said Idaho's mountain_view_id did. Ruled ONE game by two oracles
+    // (alias-decisions.json `borah-mtview-2026-04-10`). The losing row is deleted, and
+    // what it claimed is kept. CORRECTED 2026-11-14: the claim was our name lookup's, not
+    // LaxNumbers' — their page links Oregon's team (t=12983). See docs/data-quirks.md.
     if (again.keep.canonical_source !== again.drop.canonical_source) {
       await db.execute(
         `INSERT INTO source_conflicts (game_id, field, owner_source, owner_value, other_source, other_value, resolution)
