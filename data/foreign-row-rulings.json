@@ -1,0 +1,18 @@
+{
+  "about": "Rated rows a state's LaxNumbers feed tags with ANOTHER state, ruled to be rostered in the FEED's state as league members. The game import (src/laxnumbers-games/resolve.js) attaches such a row through the feed's state ONLY if it is listed here with the matching team; any other foreign row that matches only through the feed's state is refused and logged to unresolved_aliases.",
+  "ruling": "Rostered in the feed's state: these schools are members of that state's league structure and stay that state's teams.",
+  "approver": "Spencer",
+  "date": "2026-11-13",
+  "note": "Seed data for a future league field. When teams carry a league/membership separate from their geographic state, this file becomes that field's first rows and the state tags here can be corrected without moving any team out of its league.",
+  "rows": [
+    { "feed": "ID", "name": "Gonzaga Prep",    "taggedState": "WA", "team": "gonzaga_prep_id" },
+    { "feed": "ID", "name": "Mount Spokane",   "taggedState": "WA", "team": "mount_spokane_id" },
+    { "feed": "ID", "name": "Spokane Valley",  "taggedState": "WA", "team": "spokane_valley_id" },
+    { "feed": "ID", "name": "Lewis & Clark",   "taggedState": "WA", "team": "lewis_clark_id" },
+    { "feed": "ID", "name": "Bozeman Black",   "taggedState": "MT", "team": "bozeman_black_id" },
+    { "feed": "ID", "name": "Northwest Black", "taggedState": "MT", "team": "northwest_black_id" },
+    { "feed": "ID", "name": "Jackson Hole",    "taggedState": "WY", "team": "jackson_hole_id" },
+    { "feed": "WA", "name": "Hermiston",       "taggedState": "OR", "team": "hermiston_wa",
+      "why": "Ruled earlier (importer header): an Oregon town in WHSBLA, rostered hermiston_wa. League membership beats geography." }
+  ]
+}

@@ -13,8 +13,19 @@ const { createTeam, insertGame } = require('./apply');
 
 async function runPhases(ctx) {
   const { c, season: SEASON, states: STATES, rosterLocked: ROSTER_LOCKED, report } = ctx;
-  const { idx, looseIdx, teamState, stateIdx, stateLooseIdx,
-          stateAliasIdx, stateAliasLooseIdx, lockedSelfId } = ctx.ix;
+  const { teamState, candStrict, candLoose, resolveRated, resolveOpponent, byId } = ctx.ix;
+  const label = id => { const t = byId.get(id); return t ? `${t.state ?? '-'}:${t.slug}` : `new#${id}`; };
+  // Every rated row LaxNumbers tags with ANOTHER state, and where it went. The both-states
+  // rule can attach such a row to a same-named school in the feed's state; listing every
+  // one is how a human sees whether that was Hermiston (right) or a guess (wrong).
+  const foreign = (t, code, r) => {
+    if (!r.rowState || r.rowState === code) return;
+    const to = r.id != null ? `${label(r.id)} (via ${r.via === 'row' ? 'its tagged state' : 'the FEED state, ruled'})`
+             : r.reason === 'ambiguous' ? `AMBIGUOUS ${r.candidates.map(label).join(' | ')}`
+             : r.reason === 'foreign-unruled' ? `REFUSED: matches ${r.candidates.map(label).join(' | ')} only through the feed state, and no ruling lists it`
+             : 'not in roster';
+    console.log(`      foreign row: "${t.name}" tagged ${r.rowState} in ${code}'s feed → ${to}`);
+  };
 
   // ══ PHASE 1, ALL STATES FIRST. Rosters before any games, without exception. ══
   //
@@ -28,6 +39,9 @@ async function runPhases(ctx) {
   //
   // Every roster first means a placeholder can only ever be created for a name no
   // state's rated list contains — which is what "unresolved" was supposed to mean.
+  for (const slug of ctx.ix.staleForeignRulings) {
+    console.log(`  WARNING: data/foreign-row-rulings.json names team "${slug}", which does not exist`);
+  }
   const ratings = new Map();
   for (const code of STATES) {
     const state = getState(code);
@@ -35,13 +49,16 @@ async function runPhases(ctx) {
     const rows = await ratingsRows(state, SEASON);
     ratings.set(code, rows);
 
-    // LOCKED: match only, in the feed's state then the row's tagged state (see
-    // lockedSelfId). Never another state's same-named school.
+    // LOCKED: match only, by the both-states rule (resolve.js resolveRated). Never
+    // another state's same-named school.
     // Unmatched rows are counted here and reported per game in phase 2.
     if (ROSTER_LOCKED.has(code)) {
       let matched = 0;
       for (const t of rows) {
-        if (lockedSelfId(t, code) != null) matched++;
+        const r = resolveRated(t, code);
+        foreign(t, code, r);
+        if (r.id != null) matched++;
+        else if (r.reason === 'ambiguous') console.log(`      ambiguous: "${t.name}" (${t.state || code}) → ${r.candidates.map(label).join(' | ')} — unresolved, not created`);
         else console.log(`      not in roster: "${t.name}" (${t.state || code}) — unresolved, not created`);
       }
       console.log(`  ${code}: roster LOCKED — matched ${matched} of ${rows.length} rated team(s), created 0`);
@@ -50,14 +67,24 @@ async function runPhases(ctx) {
 
     let created = 0;
     for (const t of rows) {
-      // STATE-SCOPED. A global hit on another state's team is a COLLISION, not a match.
-      const candidate = idx.get(norm(t.name)) ?? looseIdx.get(loose(t.name)) ?? null;
-      const cs = candidate != null ? (teamState.get(candidate) ?? null) : undefined;
-      const have = candidate != null && (cs === code || cs === null) ? candidate : null;
-      if (candidate != null && !have) {
-        console.log(`      collision: "${t.name}" exists in ${cs} — creating a separate ${code} team`);
+      // STATE-SCOPED, by the both-states rule. No stateless match: a stateless
+      // placeholder answering to a rated team's name is how Bishop Manogue's identity
+      // was absorbed.
+      const r = resolveRated(t, code);
+      foreign(t, code, r);
+      if (r.id != null) continue;
+      if (r.reason === 'ambiguous') {
+        console.log(`      ambiguous: "${t.name}" (${t.state || code}) → ${r.candidates.map(label).join(' | ')} — not created`);
+        continue;
       }
-      if (have) continue;
+      // A row tagged with ANOTHER state is that state's team. It is never created as
+      // this feed's — that is finding 1, Idaho's feed listing WA/MT/WY schools.
+      if (r.rowState && r.rowState !== code) continue;   // already listed by foreign()
+      const elsewhere = [...(candStrict.get(norm(t.name)) ?? candLoose.get(loose(t.name)) ?? [])]
+        .map(id => teamState.get(id) ?? null).filter(st => st !== code);
+      if (elsewhere.length) {
+        console.log(`      collision: "${t.name}" exists in ${[...new Set(elsewhere)].join(', ')} — creating a separate ${code} team`);
+      }
       await createTeam(ctx, t.name, code, state.slugSuffix, 'rated in-state team');
       created++;
     }
@@ -78,9 +105,11 @@ async function runPhases(ctx) {
     for (const t of rows) {
       st.gpTotal += t.gp || 0;
       // The rated team itself must exist in OUR roster; if it does not, that is an
-      // unresolved ROSTER entry, reported the same way and never invented.
-      const selfId = locked ? lockedSelfId(t, code)
-                            : idx.get(norm(t.name)) ?? looseIdx.get(loose(t.name)) ?? null;
+      // unresolved ROSTER entry, reported the same way and never invented. Locked or not,
+      // the same both-states rule as phase 1 (finding 2: this was a GLOBAL lookup for
+      // unlocked states).
+      const selfR = resolveRated(t, code);
+      const selfId = selfR.id;
       const games = await teamGames(state, t.team_nbr, SEASON, pages);
       st.parsed += games.length;
 
@@ -89,21 +118,13 @@ async function runPhases(ctx) {
         if (g.isForfeit) st.ff++;
         if (g.teamScore === null) { st.noResult++; continue; }   // nothing to import
 
-        // SAME STATE FIRST. An opponent on state X's page is usually in X, and two
-        // states can share a school name — resolving globally is how Idaho's Mountain
-        // View became Washington's. A genuine cross-border opponent still resolves,
-        // via the fallback.
-        //
-        // LOCKED states also try their own curated aliases before the global fallback: a
-        // display rename ("Mountain View" → "Mountain View (WA)") leaves the old name only
-        // as an alias, and without this step Camas/Skyview/Woodland's "Mountain View"
-        // fell through to Idaho's.
-        let oppId = stateIdx.get(code)?.get(norm(g.opponentRaw))
-                 ?? stateLooseIdx.get(code)?.get(loose(g.opponentRaw))
-                 ?? (locked ? stateAliasIdx.get(code)?.get(norm(g.opponentRaw))
-                           ?? stateAliasLooseIdx.get(code)?.get(loose(g.opponentRaw)) : null)
-                 ?? idx.get(norm(g.opponentRaw))
-                 ?? looseIdx.get(loose(g.opponentRaw)) ?? null;
+        // SAME STATE FIRST — teams, then curated aliases (a display rename like
+        // "Mountain View" → "Mountain View (WA)" leaves the old name only as an alias).
+        // Then the whole roster ONLY if exactly one team answers to the name (finding 3:
+        // this was a last-wins global lookup, which is how Idaho's Mountain View became
+        // Washington's). Several → refused as ambiguous, never picked.
+        const oppR = resolveOpponent(g.opponentRaw, code);
+        let oppId = oppR.id;
 
         // PLACEHOLDER WITH PROVENANCE. An opponent outside our coverage still played a
         // real game against a team we are importing, and dropping it would hide a real
@@ -113,7 +134,7 @@ async function runPhases(ctx) {
         // as a plain opponent name with no out-of-state tag, which is honest: we know
         // who they played, not where they are from.
         // LOCKED states never create one: the opponent falls through to unresolved.
-        if (selfId && !oppId && !locked) {
+        if (selfId && !oppId && !locked && oppR.reason === 'unknown') {
           // A RULED origin, or NULL. Never a guess — see data/placeholder-states.json.
           const ruling = RULINGS.get(norm(g.opponentRaw)) || null;
           oppId = await createTeam(ctx, g.opponentRaw, ruling ? ruling.state : null, null,
@@ -127,6 +148,9 @@ async function runPhases(ctx) {
           const key = `${code}|${raw}`;
           const e = report.unresolved.get(key) ?? { state: code, raw, count: 0, samples: [] };
           e.count++;
+          const why = !selfId ? selfR : oppR;
+          if (why.reason === 'ambiguous') e.ambiguous = why.candidates.map(label).join(' | ');
+          if (why.reason === 'foreign-unruled') e.foreign = `tagged ${why.rowState}; matches ${why.candidates.map(label).join(' | ')} only through the feed state`;
           if (e.samples.length < 2) e.samples.push(`${g.date} ${t.name} ${g.teamScore}-${g.oppScore} ${g.opponentRaw}`);
           report.unresolved.set(key, e);
           continue;

@@ -7,11 +7,12 @@ const { norm, loose, slugify } = require('./resolve');
 /** Create a team we do not have. Provenance always; never silently. */
 async function createTeam(ctx, name, stateCode, suffix, why) {
   const { c, ix } = ctx;
-  const { idx, looseIdx, teamState, stateIdx, stateLooseIdx } = ix;
+  const { idx, looseIdx, teamState, stateIdx, stateLooseIdx, candStrict, candLoose, addCand } = ix;
   const slug = slugify(name, suffix);
   if (!ctx.commit) {
     const id = ctx.fakeId--;
     idx.set(norm(name), id); looseIdx.set(loose(name), id);
+    addCand(candStrict, norm(name), id); addCand(candLoose, loose(name), id);
     teamState.set(id, stateCode ?? null);
     if (stateCode) {
       if (!stateIdx.has(stateCode)) { stateIdx.set(stateCode, new Map()); stateLooseIdx.set(stateCode, new Map()); }
@@ -29,6 +30,7 @@ async function createTeam(ctx, name, stateCode, suffix, why) {
     `INSERT IGNORE INTO team_aliases (team_id, state, alias, source)
      VALUES (?,?,?, 'laxnumbers')`, [id, stateCode, name]);
   idx.set(norm(name), id); looseIdx.set(loose(name), id);
+  addCand(candStrict, norm(name), id); addCand(candLoose, loose(name), id);
   teamState.set(id, stateCode ?? null);
   if (stateCode) {
     if (!stateIdx.has(stateCode)) { stateIdx.set(stateCode, new Map()); stateLooseIdx.set(stateCode, new Map()); }
@@ -62,6 +64,8 @@ async function recordUnresolved(ctx) {
   console.log(`\n  UNRESOLVED OPPONENTS: ${tail.length} distinct name(s)\n`);
   for (const u of tail) {
     console.log(`    ${String(u.count).padStart(3)}×  [${u.state}] ${u.raw}`);
+    if (u.ambiguous) console.log(`           AMBIGUOUS: ${u.ambiguous} — refused, not picked`);
+    if (u.foreign) console.log(`           FOREIGN ROW, NO RULING: ${u.foreign} — refused (data/foreign-row-rulings.json)`);
     u.samples.forEach(s => console.log(`           e.g. ${s}`));
     if (ctx.commit) {
       await c.execute(

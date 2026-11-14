@@ -35,11 +35,25 @@ const DO_NOT_MERGE = [
     'The name similarity guarantees every future sweep proposes exactly this merge.' },
 ];
 
+/**
+ * FOREIGN-ROW RULINGS, Spencer 2026-11-13 (data/foreign-row-rulings.json). A rated row
+ * tagged with another state that matches ONLY through the feed's state is attached only
+ * when ruled here, to the ruled team. Keyed feed|norm(name) → team slug.
+ */
+function loadForeignRowRulings(rows) {
+  const src = rows ?? JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', '..', 'data', 'foreign-row-rulings.json'), 'utf8')).rows;
+  const m = new Map();
+  for (const r of src) m.set(`${String(r.feed).toUpperCase()}|${norm(r.name)}`, r.team);
+  return m;
+}
+
 const slugify = (name, suffix) =>
   norm(name).replace(/\s+/g, '_').slice(0, 56) + (suffix || '');
 
 /** Every team we know about, by both strict and loose name, plus curated aliases. */
-function buildIndexes(teams, aliases) {
+function buildIndexes(teams, aliases, { foreignRulings } = {}) {
+  const FOREIGN = loadForeignRowRulings(foreignRulings);
   const idx = new Map(), looseIdx = new Map();
   for (const t of teams) {
     idx.set(norm(t.name), t.id); idx.set(norm(t.slug), t.id);
@@ -58,14 +72,9 @@ function buildIndexes(teams, aliases) {
     stateLooseIdx.get(t.state).set(loose(t.slug), t.id);
   }
 
-  // A rated team in a ROSTER-LOCKED feed resolves in the FEED's state first, then in the
-  // state LaxNumbers tags it with. League membership beats geography: Hermiston is an
-  // Oregon town in WHSBLA, rostered as hermiston_wa, and tagged OR by LaxNumbers.
-  // No global fallback, no stateless placeholder.
-  //
   // Curated aliases count, scoped by the alias row's own state: a display rename keeps its
   // old name as an alias ("Mountain View" → mountain_view_wa, now "Mountain View (WA)"),
-  // and the lock must still find it.
+  // and a state-scoped lookup must still find it.
   const stateAliasIdx = new Map(), stateAliasLooseIdx = new Map();
   for (const a of aliases) {
     if (!a.state) continue;
@@ -73,17 +82,87 @@ function buildIndexes(teams, aliases) {
     stateAliasIdx.get(a.state).set(norm(a.alias), a.team_id);
     stateAliasLooseIdx.get(a.state).set(loose(a.alias), a.team_id);
   }
-  const lockedSelfId = (t, code) => {
-    for (const s of [code, t.state].filter(Boolean)) {
-      const id = stateIdx.get(s)?.get(norm(t.name)) ?? stateAliasIdx.get(s)?.get(norm(t.name))
-              ?? stateLooseIdx.get(s)?.get(loose(t.name)) ?? stateAliasLooseIdx.get(s)?.get(loose(t.name));
-      if (id != null) return id;
+
+  // EVERY team a name could mean, across all states — not the last one indexed. `idx`
+  // above is last-wins, which is how a global lookup silently picks one of three
+  // "Mountain View"s. These keep the ambiguity so a lookup can refuse it.
+  const candStrict = new Map(), candLoose = new Map();
+  const addCand = (m, k, id) => { if (!k) return; if (!m.has(k)) m.set(k, new Set()); m.get(k).add(id); };
+  for (const t of teams) {
+    addCand(candStrict, norm(t.name), t.id); addCand(candStrict, norm(t.slug), t.id);
+    addCand(candLoose, loose(t.name), t.id); addCand(candLoose, loose(t.slug), t.id);
+  }
+  for (const a of aliases) { addCand(candStrict, norm(a.alias), a.team_id); addCand(candLoose, loose(a.alias), a.team_id); }
+
+  /** One state only: team name, alias, then the loose forms of both. Never another state. */
+  const inState = (name, s) => {
+    if (!s) return null;
+    return stateIdx.get(s)?.get(norm(name)) ?? stateAliasIdx.get(s)?.get(norm(name))
+        ?? stateLooseIdx.get(s)?.get(loose(name)) ?? stateAliasLooseIdx.get(s)?.get(loose(name)) ?? null;
+  };
+
+  const slugOf = new Map(teams.map(t => [t.id, t.slug]));
+  /** Ruled slugs that name no team: a ruling that cannot match is reported, not ignored. */
+  const staleForeignRulings = [...FOREIGN.values()].filter(slug => !teams.some(t => t.slug === slug));
+
+  /**
+   * A RATED team (a row of `code`'s ratings feed) → our team id. THE BOTH-STATES RULE,
+   * ruled 2026-11-13. Look the name up in the state LaxNumbers tags the row with AND in
+   * the feed's state:
+   *   one hit, or the same team twice  → that team
+   *   two different teams              → REFUSED as ambiguous; never a pick
+   *   none                             → unknown
+   * Row-state-first would break Hermiston (a WHSBLA school rostered hermiston_wa that
+   * LaxNumbers tags OR); feed-state-first is how Idaho's feed — which lists WA, MT and WY
+   * schools — reached the wrong school. Asking both and refusing a disagreement needs
+   * neither order. No global fallback and no stateless match: a rated team belongs to a
+   * covered state's roster or it is unresolved.
+   *
+   * A row tagged with ANOTHER state that matches ONLY through the feed's state is a
+   * guess unless ruled: it is attached only when data/foreign-row-rulings.json lists it
+   * for this feed with that exact team (Idaho's seven Spokane/Montana/Wyoming schools,
+   * Hermiston). Otherwise REFUSED as 'foreign-unruled' — unresolved, logged, not created.
+   */
+  const resolveRated = (t, code) => {
+    const rowState = t.state ? String(t.state).trim().toUpperCase() : null;
+    const a = rowState ? inState(t.name, rowState) : null;
+    const b = rowState === code ? a : inState(t.name, code);
+    if (a != null && b != null && a !== b) return { id: null, reason: 'ambiguous', candidates: [a, b], rowState };
+    const id = a ?? b;
+    if (id == null) return { id: null, reason: 'unknown', rowState };
+    const via = a != null ? 'row' : 'feed';
+    if (via === 'feed' && rowState && rowState !== code) {
+      const ruled = FOREIGN.get(`${code}|${norm(t.name)}`);
+      if (ruled !== slugOf.get(id)) {
+        return { id: null, reason: 'foreign-unruled', candidates: [id], rowState };
+      }
+      return { id, rowState, via, ruled: true };
     }
-    return null;
+    return { id, rowState, via };
+  };
+
+  /**
+   * An OPPONENT string on `code`'s team pages → our team id. LaxNumbers publishes no state
+   * for an opponent, so: `code`'s own teams and aliases first; then the whole roster ONLY
+   * when exactly one team answers to the name (strict first, loose only if strict finds
+   * nothing). Several → REFUSED as ambiguous: the last-wins global map picking one of
+   * them is the Mountain View defect.
+   */
+  const resolveOpponent = (name, code) => {
+    const local = inState(name, code);
+    if (local != null) return { id: local, via: 'state' };
+    for (const [m, k] of [[candStrict, norm(name)], [candLoose, loose(name)]]) {
+      const set = m.get(k);
+      if (!set || set.size === 0) continue;
+      if (set.size === 1) return { id: [...set][0], via: 'unique' };
+      return { id: null, reason: 'ambiguous', candidates: [...set] };
+    }
+    return { id: null, reason: 'unknown' };
   };
 
   return { idx, looseIdx, byId, teamState, stateIdx, stateLooseIdx,
-           stateAliasIdx, stateAliasLooseIdx, lockedSelfId };
+           stateAliasIdx, stateAliasLooseIdx, candStrict, candLoose, addCand,
+           inState, resolveRated, resolveOpponent, staleForeignRulings };
 }
 
-module.exports = { norm, loose, RULINGS, DO_NOT_MERGE, slugify, buildIndexes };
+module.exports = { norm, loose, RULINGS, DO_NOT_MERGE, slugify, buildIndexes, loadForeignRowRulings };
