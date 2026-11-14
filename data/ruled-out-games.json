@@ -1,0 +1,15 @@
+{
+  "about": "Games that must never be imported by the LaxNumbers game job or scripts/import-laxnumbers-games.js. Checked before every insert. Matched by season, date and the unordered pair of team slugs, so a home/away flip on the source page still matches. An entry whose team slugs do not exist stops the script (a ruling that cannot match is a stale ruling).",
+  "rows": [
+    {
+      "season": 2026,
+      "date": "2026-04-10",
+      "teams": ["mountain_view_id", "borah_capital_id"],
+      "source": "laxnumbers",
+      "ruling": "017708e",
+      "ruledBy": "Spencer",
+      "ruledOn": "2026-08-10",
+      "why": "LaxNumbers' Idaho page attributes Borah's ROAD game at Bend to Idaho's Mountain View. The real game is Oregon's mt_view at home, already recorded by OHSLA (#243); the LaxNumbers row (#96806) was deleted by this ruling. See docs/data-quirks.md."
+    }
+  ]
+}

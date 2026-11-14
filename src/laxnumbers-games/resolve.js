@@ -48,12 +48,27 @@ function loadForeignRowRulings(rows) {
   return m;
 }
 
+/**
+ * RULED-OUT GAMES (data/ruled-out-games.json): never imported, checked before every
+ * insert. Keyed season|date|lowSlug|highSlug — unordered, so a home/away flip matches.
+ */
+const ruledOutKey = (season, date, slugA, slugB) =>
+  `${season}|${date}|${[slugA, slugB].sort().join('|')}`;
+function loadRuledOutGames(rows) {
+  const src = rows ?? JSON.parse(fs.readFileSync(
+    path.join(__dirname, '..', '..', 'data', 'ruled-out-games.json'), 'utf8')).rows;
+  const m = new Map();
+  for (const r of src) m.set(ruledOutKey(r.season, r.date, r.teams[0], r.teams[1]), r);
+  return m;
+}
+
 const slugify = (name, suffix) =>
   norm(name).replace(/\s+/g, '_').slice(0, 56) + (suffix || '');
 
 /** Every team we know about, by both strict and loose name, plus curated aliases. */
-function buildIndexes(teams, aliases, { foreignRulings } = {}) {
+function buildIndexes(teams, aliases, { foreignRulings, ruledOutGames } = {}) {
   const FOREIGN = loadForeignRowRulings(foreignRulings);
+  const RULED_OUT = loadRuledOutGames(ruledOutGames);
   const idx = new Map(), looseIdx = new Map();
   for (const t of teams) {
     idx.set(norm(t.name), t.id); idx.set(norm(t.slug), t.id);
@@ -104,6 +119,15 @@ function buildIndexes(teams, aliases, { foreignRulings } = {}) {
   const slugOf = new Map(teams.map(t => [t.id, t.slug]));
   /** Ruled slugs that name no team: a ruling that cannot match is reported, not ignored. */
   const staleForeignRulings = [...FOREIGN.values()].filter(slug => !teams.some(t => t.slug === slug));
+  const staleRuledOut = [...RULED_OUT.values()]
+    .filter(r => r.teams.some(slug => !teams.some(t => t.slug === slug)))
+    .map(r => `${r.season} ${r.date} ${r.teams.join(' v ')}`);
+  /** The ruled-out entry for a game between two of our team ids, or null. */
+  const ruledOut = (season, date, idA, idB) => {
+    const a = slugOf.get(idA), b = slugOf.get(idB);
+    if (!a || !b) return null;                      // a dry-run placeholder is never ruled
+    return RULED_OUT.get(ruledOutKey(season, date, a, b)) ?? null;
+  };
 
   /**
    * A RATED team (a row of `code`'s ratings feed) → our team id. THE BOTH-STATES RULE,
@@ -162,7 +186,9 @@ function buildIndexes(teams, aliases, { foreignRulings } = {}) {
 
   return { idx, looseIdx, byId, teamState, stateIdx, stateLooseIdx,
            stateAliasIdx, stateAliasLooseIdx, candStrict, candLoose, addCand,
-           inState, resolveRated, resolveOpponent, staleForeignRulings };
+           inState, resolveRated, resolveOpponent, staleForeignRulings,
+           ruledOut, staleRuledOut };
 }
 
-module.exports = { norm, loose, RULINGS, DO_NOT_MERGE, slugify, buildIndexes, loadForeignRowRulings };
+module.exports = { norm, loose, RULINGS, DO_NOT_MERGE, slugify, buildIndexes, loadForeignRowRulings,
+                   loadRuledOutGames };

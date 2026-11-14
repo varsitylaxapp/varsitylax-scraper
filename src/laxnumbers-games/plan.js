@@ -42,6 +42,13 @@ async function runPhases(ctx) {
   for (const slug of ctx.ix.staleForeignRulings) {
     console.log(`  WARNING: data/foreign-row-rulings.json names team "${slug}", which does not exist`);
   }
+  // A ruling that cannot match protects nothing. The script makes it fatal
+  // (strictRulings); the cron will warn and carry on.
+  for (const g of ctx.ix.staleRuledOut) {
+    const msg = `data/ruled-out-games.json: "${g}" names a team that does not exist`;
+    if (ctx.strictRulings) throw new Error(msg);
+    console.log(`  WARNING: ${msg}`);
+  }
   const ratings = new Map();
   for (const code of STATES) {
     const state = getState(code);
@@ -98,7 +105,7 @@ async function runPhases(ctx) {
     const locked = ROSTER_LOCKED.has(code);
     const st = { teams: rows.length, gpTotal: 0, parsed: 0, resolved: 0, unresolved: 0,
                  matchedExisting: 0, wouldInsert: 0, ot: 0, ff: 0, noResult: 0,
-                 placeholders: 0, gpFromSource: 0, mirrored: 0, ruled: 0, untagged: 0,
+                 placeholders: 0, gpFromSource: 0, mirrored: 0, ruled: 0, untagged: 0, ruledOut: 0,
                  matchedBySource: {} };
     const pages = { ok: 0, firstRay: null, lastRay: null };
 
@@ -163,6 +170,17 @@ async function runPhases(ctx) {
         if (ctx.seenThisRun.has(runKey)) { st.mirrored++; continue; }
         ctx.seenThisRun.add(runKey);
 
+        // RULED OUT — never imported, whatever the database holds. Checked before the
+        // existence lookup so the ruling is reported even if someone re-created the row.
+        const ruling = ctx.ix.ruledOut(SEASON, g.date, homeId, awayId);
+        if (ruling) {
+          st.ruledOut++;
+          console.log(`      ruled out: ${g.date} ${label(homeId)} v ${label(awayId)} ` +
+                      `${g.isHome ? g.teamScore : g.oppScore}-${g.isHome ? g.oppScore : g.teamScore}` +
+                      ` — ruling ${ruling.ruling}, not imported`);
+          continue;
+        }
+
         const [[existing]] = (homeId < 0 || awayId < 0) ? [[null]] : await c.execute(
           `SELECT id, canonical_source FROM games
             WHERE season = ? AND game_date = ?
@@ -186,7 +204,7 @@ async function runPhases(ctx) {
                 (pages.ok ? `, cf-ray ${pages.firstRay} … ${pages.lastRay}` : ''));
     console.log(`  ${code}: ${st.teams} rated teams, gp total ${st.gpTotal}, parsed ${st.parsed}`);
     console.log(`      resolved ${st.resolved}  unresolved ${st.unresolved}  ` +
-                `matched-existing ${st.matchedExisting}  would-insert ${st.wouldInsert}`);
+                `matched-existing ${st.matchedExisting}  would-insert ${st.wouldInsert}  ruled-out ${st.ruledOut}`);
     console.log(`      OT ${st.ot}  forfeits ${st.ff}  no-result ${st.noResult}`);
     // Locked states only, so an unlocked state's report is unchanged line for line.
     if (locked) {

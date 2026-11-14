@@ -200,7 +200,7 @@ if (COMMIT && LOCKED_HERE.length) {
     // is the thing this exists to catch — three previous count ladders each found one.
     console.log('\n  ── COUNT LADDER — every parsed row accounted for ──');
     for (const [code, st] of Object.entries(report.perState)) {
-      const explained = st.noResult + st.mirrored + st.matchedExisting + st.wouldInsert + st.unresolved;
+      const explained = st.noResult + st.mirrored + st.matchedExisting + st.ruledOut + st.wouldInsert + st.unresolved;
       const gap = st.parsed - explained;
       console.log(`\n    ${code}`);
       console.log(`      source gp total (ratings service) ${String(st.gpTotal).padStart(5)}`);
@@ -209,15 +209,16 @@ if (COMMIT && LOCKED_HERE.length) {
       console.log(`        - the SAME game from the other   ${String(st.mirrored).padStart(5)}   (every game appears on both pages)`);
       console.log(`          team's page`);
       console.log(`        - matched an existing row       ${String(st.matchedExisting).padStart(5)}   (cross-border, NOT duplicated)`);
+      console.log(`        - ruled out, never imported     ${String(st.ruledOut).padStart(5)}   (data/ruled-out-games.json)`);
       console.log(`        - unresolved, skipped           ${String(st.unresolved).padStart(5)}`);
       console.log(`        = imported                      ${String(st.wouldInsert).padStart(5)}`);
       console.log(`      UNEXPLAINED                       ${String(gap).padStart(5)}   ${gap === 0 ? 'ok' : '*** INVESTIGATE ***'}`);
       // A GAME, not a row: every game appears on both teams' pages, and `mirrored` counts
-      // the second sighting. Each resolved game's FIRST sighting is either matched or
-      // imported, so those two alone count games. (This line used to add `mirrored`,
+      // the second sighting. Each resolved game's FIRST sighting is matched, ruled out or
+      // imported, so those three alone count games. (This line used to add `mirrored`,
       // which made it the resolved-ROW count.) Unresolved rows cannot be paired into
       // games — their opponent has no id — so they stay a row count, on their own line.
-      console.log(`      distinct games (resolved)         ${String(st.matchedExisting + st.wouldInsert).padStart(5)}`);
+      console.log(`      distinct games (resolved)         ${String(st.matchedExisting + st.ruledOut + st.wouldInsert).padStart(5)}`);
       console.log(`      unresolved rows (not paired)      ${String(st.unresolved).padStart(5)}`);
       // parsed-vs-gp: each game appears on BOTH teams' pages, so both double-count.
       const delta = st.parsed - st.gpTotal;

@@ -7,7 +7,7 @@ const { buildIndexes } = require('./resolve');
 const { runPhases } = require('./plan');
 const { recordUnresolved } = require('./apply');
 
-async function importLaxNumbersGames({ c, commit, season, states, rosterLocked }) {
+async function importLaxNumbersGames({ c, commit, season, states, rosterLocked, strictRulings = true }) {
   // A missing season is an error, never a silent 2026. Checked before any request.
   if (!Number.isInteger(season) || season < 2000 || season > 2100) {
     throw new Error(`importLaxNumbersGames: season must be a year in 2000–2100, got ${JSON.stringify(season)}`);
@@ -18,7 +18,7 @@ async function importLaxNumbersGames({ c, commit, season, states, rosterLocked }
   const [aliases] = await c.execute('SELECT team_id, state, alias FROM team_aliases');
 
   const ctx = {
-    c, commit, season, states, rosterLocked, report,
+    c, commit, season, states, rosterLocked, strictRulings, report,
     ix: buildIndexes(teams, aliases),
     // Dry run SIMULATES creation — assigning a provisional id and indexing it — so the
     // count ladder below reflects what a commit would actually do. Without this every
