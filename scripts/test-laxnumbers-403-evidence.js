@@ -7,6 +7,8 @@
 //
 //   node scripts/test-laxnumbers-403-evidence.js
 //
+// Also covers the game import's bulk mode (quiet 200s) and its required season.
+//
 // EXIT 0 all cases pass · 1 a case failed
 
 const path = require('path');
@@ -117,6 +119,43 @@ const BODY = '<!DOCTYPE html><title>Just a moment...</title>' + 'x'.repeat(500);
   console.log('\n5. request and client settings unchanged');
   check('impit settings', impitCalls.ctor.every((o) => JSON.stringify(o) === '{"browser":"chrome","timeout":20000}'), JSON.stringify(impitCalls.ctor[0]));
   check('request headers', impitCalls.fetch.every((f) => f.url === URL_ && JSON.stringify(f.opts) === JSON.stringify({ headers: { Referer: REF } })));
+
+  // ── 6. quiet mode (bulk team pages) ─────────────────────────────────────
+  console.log('\n6. quiet mode: team pages');
+  ln = fresh(); ipify.mode = 'ok';
+  const page = '<table><tr><td>2026-03-04</td><td>19:00</td><td>at Borah</td><td></td><td>12 - 3</td></tr></table>';
+  nextResponse = () => response(200, { 'cf-ray': 'q1-SJC' }, page);
+  const rays = [];
+  capture(); const g6 = await ln.scrapeLaxNumbersTeamGames(OR, 123, 2026, { quiet: true, onOk: (r) => rays.push(r) }); release();
+  check('200 not logged in quiet mode', !logs.some((l) => l.includes('cf-ray=')), JSON.stringify(logs));
+  check('onOk receives the cf-ray', rays.length === 1 && rays[0] === 'q1-SJC');
+  check('page still parsed', g6.length === 1 && g6[0].teamScore === 12 && !g6[0].isHome);
+  nextResponse = () => response(403, CF, BODY);
+  capture(); err = null;
+  try { await ln.scrapeLaxNumbersTeamGames(OR, 123, 2026, { quiet: true, onOk: () => rays.push('x') }); } catch (e) { err = e; }
+  release();
+  check('non-200 still logs full evidence when quiet', logs.some((l) => l.startsWith('[LaxNumbers] 403 ') && l.includes('cf-mitigated=challenge')));
+  check('non-200 still throws the same message', err && /^LaxNumbers 403 for https:\/\/www\.laxnumbers\.com\/team_info\.php/.test(err.message));
+  check('onOk not called on non-200', rays.length === 1);
+
+  // ── 7. a missing season is an error, before any request ───────────────────
+  console.log('\n7. season is required');
+  const before = impitCalls.fetch.length;
+  for (const [name, call] of [
+    ['scrapeLaxNumbersTeamGames', () => ln.scrapeLaxNumbersTeamGames(OR, 123)],
+    ['fetchLaxNumbersRatingsRaw', () => ln.fetchLaxNumbersRatingsRaw(OR)],
+    ['fetchLaxNumbersRatingsRaw "2027" (string)', () => ln.fetchLaxNumbersRatingsRaw(OR, '2027')],
+  ]) {
+    let e7 = null; try { await call(); } catch (e) { e7 = e; }
+    check(`${name} throws`, e7 && /season must be a year/.test(e7.message), e7 && e7.message);
+  }
+  const { importLaxNumbersGames } = require('../src/laxnumbers-games');
+  let e8 = null, touched = false;
+  try { await importLaxNumbersGames({ c: { execute: async () => { touched = true; return [[]]; } }, commit: false, states: ['ID'], rosterLocked: new Set() }); }
+  catch (e) { e8 = e; }
+  check('importLaxNumbersGames throws without a season', e8 && /season must be a year/.test(e8.message), e8 && e8.message);
+  check('…before touching the database', !touched);
+  check('no request made by any of them', impitCalls.fetch.length === before);
 
   console.log(`\n${failures ? `FAIL — ${failures} check(s) failed` : 'PASS — all checks'}`);
   process.exit(failures ? 1 : 0);

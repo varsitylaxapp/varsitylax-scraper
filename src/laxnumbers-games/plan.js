@@ -73,6 +73,7 @@ async function runPhases(ctx) {
                  matchedExisting: 0, wouldInsert: 0, ot: 0, ff: 0, noResult: 0,
                  placeholders: 0, gpFromSource: 0, mirrored: 0, ruled: 0, untagged: 0,
                  matchedBySource: {} };
+    const pages = { ok: 0, firstRay: null, lastRay: null };
 
     for (const t of rows) {
       st.gpTotal += t.gp || 0;
@@ -80,7 +81,7 @@ async function runPhases(ctx) {
       // unresolved ROSTER entry, reported the same way and never invented.
       const selfId = locked ? lockedSelfId(t, code)
                             : idx.get(norm(t.name)) ?? looseIdx.get(loose(t.name)) ?? null;
-      const games = await teamGames(state, t.team_nbr, SEASON);
+      const games = await teamGames(state, t.team_nbr, SEASON, pages);
       st.parsed += games.length;
 
       for (const g of games) {
@@ -157,6 +158,8 @@ async function runPhases(ctx) {
       await politeness();
     }
     report.perState[code] = st;
+    console.log(`[LaxNumbers:${code}] ${pages.ok} team page(s) 200` +
+                (pages.ok ? `, cf-ray ${pages.firstRay} … ${pages.lastRay}` : ''));
     console.log(`  ${code}: ${st.teams} rated teams, gp total ${st.gpTotal}, parsed ${st.parsed}`);
     console.log(`      resolved ${st.resolved}  unresolved ${st.unresolved}  ` +
                 `matched-existing ${st.matchedExisting}  would-insert ${st.wouldInsert}`);

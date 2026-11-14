@@ -210,8 +210,14 @@ if (COMMIT && LOCKED_HERE.length) {
       console.log(`        - unresolved, skipped           ${String(st.unresolved).padStart(5)}`);
       console.log(`        = imported                      ${String(st.wouldInsert).padStart(5)}`);
       console.log(`      UNEXPLAINED                       ${String(gap).padStart(5)}   ${gap === 0 ? 'ok' : '*** INVESTIGATE ***'}`);
+      // A GAME, not a row: every game appears on both teams' pages, and `mirrored` counts
+      // the second sighting. Each resolved game's FIRST sighting is either matched or
+      // imported, so those two alone count games. (This line used to add `mirrored`,
+      // which made it the resolved-ROW count.) Unresolved rows cannot be paired into
+      // games — their opponent has no id — so they stay a row count, on their own line.
+      console.log(`      distinct games (resolved)         ${String(st.matchedExisting + st.wouldInsert).padStart(5)}`);
+      console.log(`      unresolved rows (not paired)      ${String(st.unresolved).padStart(5)}`);
       // parsed-vs-gp: each game appears on BOTH teams' pages, so both double-count.
-      console.log(`      distinct games seen               ${String(st.mirrored + st.matchedExisting + st.wouldInsert).padStart(5)}`);
       const delta = st.parsed - st.gpTotal;
       console.log(`      parsed − gp                       ${String(delta).padStart(5)}   ` +
                   `(no-result ${st.noResult}, forfeits ${st.ff})`);

@@ -9,8 +9,13 @@ async function ratingsRows(state, season) {
   return fetchLaxNumbersRatingsRaw(state, season);
 }
 
-async function teamGames(state, teamNbr, season) {
-  return scrapeLaxNumbersTeamGames(state, teamNbr, season);
+// Team pages are the bulk of a run (144 on a full pass), so their 200s are quiet and
+// counted here; plan.js prints one summary line per state. Non-200s still log in full.
+async function teamGames(state, teamNbr, season, pages) {
+  return scrapeLaxNumbersTeamGames(state, teamNbr, season, {
+    quiet: true,
+    onOk: (ray) => { pages.ok++; pages.firstRay ??= ray; pages.lastRay = ray; },
+  });
 }
 
 const politeness = () => new Promise(r => setTimeout(r, 120));

@@ -8,6 +8,10 @@ const { runPhases } = require('./plan');
 const { recordUnresolved } = require('./apply');
 
 async function importLaxNumbersGames({ c, commit, season, states, rosterLocked }) {
+  // A missing season is an error, never a silent 2026. Checked before any request.
+  if (!Number.isInteger(season) || season < 2000 || season > 2100) {
+    throw new Error(`importLaxNumbersGames: season must be a year in 2000–2100, got ${JSON.stringify(season)}`);
+  }
   const report = { perState: {}, unresolved: new Map() };
 
   const [teams] = await c.execute('SELECT id, slug, name, state FROM teams');
