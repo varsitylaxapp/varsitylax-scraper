@@ -52,7 +52,11 @@ PROD_SQL_MODE="NO_ENGINE_SUBSTITUTION"   # prod (DreamHost). NOT Railway's STRIC
 CONTAINER="vlx-rehearsal"
 PORT=13306
 ROOTPW="rehearsal"
-WORK=$(mktemp -d)
+# The teardown below deletes WORK. Checked BEFORE mktemp, so a refused TMPDIR creates nothing.
+source scripts/lib/scratch-guard.sh
+require_scratch "${TMPDIR:-/tmp}/vlx-rehearsal"
+WORK=$(mktemp -d "${TMPDIR:-/tmp}/vlx-rehearsal.XXXXXX")
+require_scratch "$WORK"
 API_PID=""
 
 say() { printf '\n\033[1m── %s\033[0m\n' "$*"; }
