@@ -3,7 +3,7 @@
  *
  * Used by the API's per-game `timeZone` field (the home team's zone), so a client can
  * show a kickoff in local time. The same rules decide how the LaxNumbers import reads a
- * game time (src/laxnumbers-games/time.js on laxnumbers-games-core):
+ * game time (src/laxnumbers-games/time.js imports them from here):
  *   1. data/team-timezones.json, for a team whose zone is not its state's (the Idaho
  *      panhandle and the Spokane schools rostered in Idaho are Pacific);
  *   2. the state registry's timeZone (src/config/states.js);

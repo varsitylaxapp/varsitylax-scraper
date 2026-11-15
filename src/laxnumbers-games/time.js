@@ -6,48 +6,12 @@
  * does: as Pacific wall-clock in games.game_datetime. game_date stays the date LaxNumbers
  * lists, so the API's day grouping (dateKey, from game_date) is the local day.
  *
- * Zones come from IANA rules through Intl — never a hard-coded offset or DST date:
- *   1. data/team-timezones.json, for a team whose zone is not its state's (the Idaho
- *      panhandle and the Spokane schools rostered in Idaho are Pacific);
- *   2. the state registry's timeZone (src/config/states.js);
- *   3. STATE_ZONES below, for opponents' states outside the registry;
- *   4. otherwise unknown: the time is not stored, and the run counts it.
+ * Zones come from IANA rules through Intl — never a hard-coded offset or DST date. Which
+ * zone a team plays in is decided by src/time-zones.js, the one copy of those rules, which
+ * the API's per-game `timeZone` field uses too. A team with no known zone gets no stored
+ * time, and the run counts it.
  */
-const path = require('path');
-const { getState } = require('../config/states');
-
-const PACIFIC = 'America/Los_Angeles';
-
-// States and provinces that appear as home teams but are not in the registry. Each is the
-// IANA zone for the state's main population; a team elsewhere belongs in the override file.
-const STATE_ZONES = {
-  CA: 'America/Los_Angeles', BC: 'America/Vancouver', UT: 'America/Denver',
-  NM: 'America/Denver', WY: 'America/Denver', CO: 'America/Denver',
-  TX: 'America/Chicago', TN: 'America/Chicago', IL: 'America/Chicago',
-  FL: 'America/New_York', NY: 'America/New_York', RI: 'America/New_York',
-};
-
-function loadOverrides(file = path.join(__dirname, '..', '..', 'data', 'team-timezones.json')) {
-  const doc = require(file);
-  const m = new Map();
-  for (const t of doc.teams) {
-    if (!isValidZone(t.zone)) throw new Error(`team-timezones.json: "${t.slug}" has unknown zone "${t.zone}"`);
-    m.set(t.slug, t.zone);
-  }
-  return m;
-}
-
-function isValidZone(zone) {
-  try { new Intl.DateTimeFormat('en-US', { timeZone: zone }); return true; } catch { return false; }
-}
-
-/** The zone a team plays its home games in, or null when we do not know it. */
-function teamZone(team, overrides) {
-  if (!team) return null;
-  if (overrides.has(team.slug)) return overrides.get(team.slug);
-  if (!team.state) return null;
-  return getState(team.state)?.timeZone ?? STATE_ZONES[team.state] ?? null;
-}
+const { teamZone, loadOverrides, isValidZone, PACIFIC, STATE_ZONES } = require('../time-zones');
 
 // Wall-clock fields of an instant in a zone, from Intl.
 function wallParts(ms, zone) {
