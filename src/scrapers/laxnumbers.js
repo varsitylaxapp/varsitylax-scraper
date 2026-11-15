@@ -15,7 +15,8 @@ const client = new Impit({ browser: 'chrome', timeout: 20000 });
 // fingerprint block on the next failure. Logging only: no retries, no change to the
 // request, and the thrown message stays byte-identical because it lands in scrape_log.
 const https = require('https');
-let outboundIpv4; // one lookup and one log line per process; the cron is a fresh process every run
+let outboundIpv4; // one lookup per process; the cron is a fresh process every run
+let ipLogged = false; // and one log line
 function lookupOutboundIpv4() {
   if (!outboundIpv4) {
     outboundIpv4 = new Promise((resolve) => {
@@ -30,6 +31,18 @@ function lookupOutboundIpv4() {
     });
   }
   return outboundIpv4;
+}
+
+// 2026-11-14: a cron deployment that left from an Amazon address was challenged on every
+// run; the same image on Railway's own network got 200. The IP used to be logged only on a
+// failure, so a passing run said nothing about where it ran. Now the cron logs it once per
+// run, pass or fail. Never throws: the lookup resolves to "unknown (…)" on any error or
+// after 5 s. `log` lets the failure path keep writing to stderr as before.
+async function logOutboundIpv4(log = console.log) {
+  if (ipLogged) return;
+  ipLogged = true;
+  try { log(`[LaxNumbers] outbound IPv4=${await lookupOutboundIpv4()}`); }
+  catch (e) { log(`[LaxNumbers] outbound IPv4=unknown (${e.message})`); }
 }
 
 // `quiet` is for bulk callers (one request per team page): a 200 is not logged here and
@@ -50,7 +63,7 @@ async function fetchLaxNumbers(url, referer, { quiet = false, onOk } = {}) {
     }
     console.error(`[LaxNumbers] ${res.status} ${url} cf-mitigated=${h('cf-mitigated')} ` +
       `cf-ray=${h('cf-ray')} server=${h('server')} body=${JSON.stringify(body)}`);
-    if (!outboundIpv4) console.error(`[LaxNumbers] outbound IPv4=${await lookupOutboundIpv4()}`);
+    await logOutboundIpv4(console.error);
   }
   if (!res.ok) throw new Error(`LaxNumbers ${res.status} for ${url}`);
   return res;
@@ -243,4 +256,4 @@ function parseLaxNumbersTeamGames(html, state, season) {
 }
 
 module.exports = { scrapeLaxNumbers, scrapeLaxNumbersTeamGames, parseLaxNumbersTeamGames,
-                   fetchLaxNumbersRatingsRaw };
+                   fetchLaxNumbersRatingsRaw, logOutboundIpv4 };

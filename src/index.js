@@ -1,7 +1,7 @@
 require('dotenv').config();
 const cron = require('node-cron');
 const db   = require('./db');
-const { scrapeLaxNumbers } = require('./scrapers/laxnumbers');
+const { scrapeLaxNumbers, logOutboundIpv4 } = require('./scrapers/laxnumbers');
 const { scrapeLaxPower }   = require('./scrapers/laxpower');
 const { scrapeOHSLA }      = require('./scrapers/ohsla');
 const dualWrite            = require('./dual-write');
@@ -110,6 +110,9 @@ async function runAll() {
       await logScrape('laxnumbers', 0, 'error', err.message, st.code);
     }
   }
+  // One line per run, pass or fail, so every run records which network it left from.
+  // A no-op if a failure above already logged it. Never throws.
+  await logOutboundIpv4();
 
   // ── LaxPower rankings ─────────────────────────────────────────────────────
   try {

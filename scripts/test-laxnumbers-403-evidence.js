@@ -7,7 +7,8 @@
 //
 //   node scripts/test-laxnumbers-403-evidence.js
 //
-// Also covers the game import's bulk mode (quiet 200s) and its required season.
+// Also covers the game import's bulk mode (quiet 200s), its required season, and the
+// once-per-run IP line the cron prints whether LaxNumbers passed or failed.
 //
 // EXIT 0 all cases pass · 1 a case failed
 
@@ -156,6 +157,41 @@ const BODY = '<!DOCTYPE html><title>Just a moment...</title>' + 'x'.repeat(500);
   check('importLaxNumbersGames throws without a season', e8 && /season must be a year/.test(e8.message), e8 && e8.message);
   check('…before touching the database', !touched);
   check('no request made by any of them', impitCalls.fetch.length === before);
+
+  // ── 8. the IP line on every cron run, pass or fail ───────────────────────
+  console.log('\n8. once-per-run IP line');
+  ln = fresh(); ipify.mode = 'ok';
+  nextResponse = () => response(200, { 'cf-ray': 'ok8-SJC' }, rows);
+  capture();
+  for (let i = 0; i < 6; i++) await ln.scrapeLaxNumbers(OR);   // a passing run: six states
+  await ln.logOutboundIpv4();                                    // what runAll() does after the loop
+  await ln.logOutboundIpv4();
+  release();
+  check('passing run logs the IP once', logs.filter((l) => l === '[LaxNumbers] outbound IPv4=203.0.113.7').length === 1, JSON.stringify(logs.filter((l) => l.includes('IPv4'))));
+  check('…with one lookup, IPv4, 5 s timeout', ipify.calls.length === 1 && ipify.calls[0].family === 4 && ipify.calls[0].timeout === 5000);
+
+  ln = fresh(); ipify.mode = 'ok';
+  nextResponse = () => response(403, CF, BODY);
+  capture();
+  for (let i = 0; i < 6; i++) { try { await ln.scrapeLaxNumbers(OR); } catch {} }
+  await ln.logOutboundIpv4();
+  release();
+  check('failing run still logs it once, on stderr path, after the first evidence line',
+    logs.filter((l) => l.includes('outbound IPv4=')).length === 1
+      && logs.findIndex((l) => l.includes('outbound IPv4=')) === logs.findIndex((l) => l.startsWith('[LaxNumbers] 403 ')) + 1);
+  check('…and the end-of-run call adds no lookup', ipify.calls.length === 1);
+
+  for (const mode of ['error', 'timeout']) {
+    ln = fresh(); ipify.mode = mode;
+    capture(); let e9 = null; try { await ln.logOutboundIpv4(); } catch (e) { e9 = e; } release();
+    check(`ipify ${mode}: never throws, logs unknown`, !e9 && logs.length === 1 && logs[0].startsWith('[LaxNumbers] outbound IPv4=unknown ('), logs[0]);
+  }
+
+  const idx = require('fs').readFileSync(path.join(__dirname, '..', 'src', 'index.js'), 'utf8');
+  const loopEnd = idx.indexOf("await logScrape('laxnumbers', 0, 'error'");
+  const call = idx.indexOf('await logOutboundIpv4();');
+  check('runAll() calls it after the LaxNumbers loop, before LaxPower',
+    loopEnd > 0 && call > loopEnd && call < idx.indexOf('scrapeLaxPower()'));
 
   console.log(`\n${failures ? `FAIL — ${failures} check(s) failed` : 'PASS — all checks'}`);
   process.exit(failures ? 1 : 0);
