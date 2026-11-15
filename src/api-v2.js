@@ -9,6 +9,14 @@ const db = require('./db');
 const { DEFAULT_STATE, isValidState, listStates, enabledStates } = require('./config/states');
 const scrapeHealth = require('./scrape-health');
 const { assignBrackets } = require('./playoff-graph');
+const { teamZone, loadOverrides } = require('./time-zones');
+
+// Teams whose home zone is not their state's (data/team-timezones.json). A bad file must
+// not take the API down: it logs once and every team falls back to its state's zone.
+let ZONE_OVERRIDES;
+try { ZONE_OVERRIDES = loadOverrides(); }
+catch (err) { console.error(`[api-v2] team-timezones.json not loaded: ${err.message}`); ZONE_OVERRIDES = new Map(); }
+const homeZone = (slug, state) => teamZone({ slug, state }, ZONE_OVERRIDES);
 
 const router = express.Router();
 const SEASON = () => parseInt(process.env.SEASON || '2026');
@@ -125,6 +133,11 @@ function gameJson(r) {
     // got the wrong day. `date` keeps its format because changing it would be
     // breaking; this is the field to prefer. See docs/api-contract.md §1.3.
     dateKey: dayKey(r.date),
+    // ADDITIVE 2026-11-15, appended LAST. The home team's IANA zone ("America/Boise"),
+    // or null when unknown. `datetime` is unchanged (Pacific wall clock); a client that
+    // wants local kickoff time reads it as Pacific and formats it in this zone.
+    // See docs/api-contract.md §8.
+    timeZone: homeZone(r.homeSlug, r.homeState),
   };
 }
 
@@ -533,6 +546,7 @@ router.get('/schedule/team/:slug', async (req, res) => {
         gameType: r.gameType,   // ADDITIVE 2026-07-29 — see gameJson()
           isForfeit: !!r.isForfeit,  // ADDITIVE 2026-07-29 (section J)
         dateKey: dayKey(r.date),   // ADDITIVE 2026-07-30 — see gameJson()
+        timeZone: homeZone(r.homeSlug, r.homeState),   // ADDITIVE 2026-11-15 — see gameJson()
       };
     });
     res.json({ team: { slug: team.slug, name: team.name }, season, games });
@@ -540,3 +554,5 @@ router.get('/schedule/team/:slug', async (req, res) => {
 });
 
 module.exports = router;
+// For scripts/test-api-timezone.js. Not a route.
+module.exports.gameJson = gameJson;
