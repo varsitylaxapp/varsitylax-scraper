@@ -175,7 +175,7 @@ const fakeConn = { execute: async (sql) => sql.includes('FROM teams') ? [teams.f
   g = G('Cody', 4242, 'ID');
   check('a number in two feeds where one refuses → refused', g.id === null && g.by === 'number' && g.reason === 'unknown', JSON.stringify(g));
 
-  console.log('\n7. through the phases: a refused number creates no placeholder; the Borah row finds OHSLA\'s game');
+  console.log('\n7. through the phases: no placeholders at all (flag 1); the Borah row is an Oregon game (flag 5)');
   FEEDS.clear(); PAGES.clear(); FETCHED.length = 0;
   FEEDS.set('ID', [{ team_nbr: 1, name: 'Borah/Capital', state: 'ID' },
                    { team_nbr: 999, name: 'Ghost', state: 'MT' }]);
@@ -192,17 +192,20 @@ const fakeConn = { execute: async (sql) => sql.includes('FROM teams') ? [teams.f
     { season: 2026, date: '2026-04-10', teams: ['mountain_view_id', 'borah_capital_id'], ruling: '017708e' }] });
   const { runPhases } = require('../src/laxnumbers-games/plan');
   const ctx = { c: conn, commit: false, season: 2026, states: ['ID'], rosterLocked: new Set(), ix: ix3,
-                fakeId: -1, seenThisRun: new Set(), report: { perState: {}, unresolved: new Map() } };
+                fakeId: -1, seenThisRun: new Set(), report: { perState: {}, unresolved: new Map() },
+                http: { mode: 'live', dir: null, spacingMs: 0 }, counter: { requests: 0 }, zoneOverrides: new Map() };
   const log = console.log; const out = []; console.log = (...a) => out.push(a.join(' '));
   try { await runPhases(ctx); } finally { console.log = log; }
   const st = ctx.report.perState.ID;
   check('every other feed is fetched for the lookup, Oregon included',
     ['OR', 'WA', 'AZ', 'MT', 'NV'].every(c => FETCHED.includes(c)) && FETCHED.filter(c => c === 'ID').length === 1, FETCHED.join(','));
-  check('Borah 4/10 → matched OHSLA\'s game (mt_view id 1 v borah id 11); the guard does not fire',
-    st.matchedExisting === 1 && st.ruledOut === 0, JSON.stringify(st));
-  check('the refused number (Ghost, t=999): unresolved, NO placeholder', st.unresolved === 1 && ctx.report.unresolved.has('ID|Ghost')
+  check('Borah 4/10 → Oregon\'s mt_view, so an Oregon game: nothing written, no lookup; the ruled-out guard does not fire',
+    st.oregon === 1 && st.ruledOut === 0 && st.inserted + st.updated + st.filled + st.unchanged === 0
+      && !sql.some(p => p && p[2] === 1 && p[3] === 11), JSON.stringify(st));
+  check('the refused number (Ghost, t=999): unresolved, NO placeholder', ctx.report.unresolved.has('ID|Ghost')
     && /t=999/.test(ctx.report.unresolved.get('ID|Ghost').number), JSON.stringify([...ctx.report.unresolved.values()]));
-  check('an unlinked unknown opponent still gets its placeholder (unchanged)', st.placeholders === 1 && st.wouldInsert === 1, JSON.stringify(st));
+  check('an unlinked unknown opponent: unresolved too, NO placeholder (flag 1, diff 6)',
+    st.unresolved === 2 && ctx.report.unresolved.has('ID|Nowhere Prep') && ctx.fakeId === -1 && st.inserted === 0, JSON.stringify(st));
   check('counts: 2 by number, 1 by name (no link)', st.oppByNumber === 2 && st.oppByName === 1 && st.oppNoLink === 1, JSON.stringify(st));
 
 console.log(`\n${failures ? `FAIL — ${failures} check(s) failed` : 'PASS — all checks'}`);

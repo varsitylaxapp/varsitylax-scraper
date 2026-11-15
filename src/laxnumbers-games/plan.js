@@ -7,9 +7,11 @@
  *        fakeId, seenThisRun: Set, report: { perState, unresolved: Map } }
  */
 const { getState, listStates } = require('../config/states');
-const { norm, loose, RULINGS, indexRatedByNumber } = require('./resolve');
+const { norm, loose, indexRatedByNumber } = require('./resolve');
 const { ratingsRows, teamGames, politeness } = require('./fetch');
-const { createTeam, insertGame } = require('./apply');
+const { createTeam, findExisting, decide, insertGame, applySet, logConflicts,
+        upsertSourceRecord, pruneVanished } = require('./apply');
+const { toPacific, teamZone, todayIn } = require('./time');
 
 async function runPhases(ctx) {
   const { c, season: SEASON, states: STATES, rosterLocked: ROSTER_LOCKED, report } = ctx;
@@ -50,10 +52,15 @@ async function runPhases(ctx) {
     console.log(`  WARNING: ${msg}`);
   }
   const ratings = new Map();
-  for (const code of STATES) {
+  const { http, counter } = ctx;
+  // Phase 1 can create rated in-state teams (unlocked states), so on commit it is one
+  // transaction of its own, ahead of the per-state game transactions.
+  if (ctx.commit) await c.beginTransaction();
+  for (const [i, code] of STATES.entries()) {
     const state = getState(code);
     if (!state) throw new Error(`unknown state ${code}`);
-    const rows = await ratingsRows(state, SEASON);
+    if (i) await politeness(http);
+    const rows = await ratingsRows(state, SEASON, http, counter);
     ratings.set(code, rows);
 
     // LOCKED: match only, by the both-states rule (resolve.js resolveRated). Never
@@ -103,137 +110,192 @@ async function runPhases(ctx) {
   // nothing created from these; one request each.
   for (const st of listStates()) {
     if (!st.laxnumbersId || ratings.has(st.code)) continue;
-    await politeness();
-    const rows = await ratingsRows(st, SEASON);
+    await politeness(http);
+    const rows = await ratingsRows(st, SEASON, http, counter);
     ratings.set(st.code, rows);
     console.log(`  ${st.code}: ratings fetched for the opponent lookup only — ${rows.length} rated team(s)`);
   }
+  if (ctx.commit) await c.commit();
   const byNbr = indexRatedByNumber(ratings);
 
-  // ══ PHASE 2: games, with every roster already in place. ══
+  // ══ PHASE 2a: every team page, before any game is written. ══
+  // A failed request stops the run here, with nothing written for any state.
+  const pagesByState = new Map();
   for (const code of STATES) {
     const state = getState(code);
-    const rows = ratings.get(code);
-    const locked = ROSTER_LOCKED.has(code);
-    const st = { teams: rows.length, gpTotal: 0, parsed: 0, resolved: 0, unresolved: 0,
-                 matchedExisting: 0, wouldInsert: 0, ot: 0, ff: 0, noResult: 0,
-                 placeholders: 0, gpFromSource: 0, mirrored: 0, ruled: 0, untagged: 0, ruledOut: 0,
-                 oppByNumber: 0, oppByName: 0, oppNoLink: 0, oppNotInFeeds: 0,
-                 matchedBySource: {} };
     const pages = { ok: 0, firstRay: null, lastRay: null };
-
-    for (const t of rows) {
-      st.gpTotal += t.gp || 0;
-      // The rated team itself must exist in OUR roster; if it does not, that is an
-      // unresolved ROSTER entry, reported the same way and never invented. Locked or not,
-      // the same both-states rule as phase 1 (finding 2: this was a GLOBAL lookup for
-      // unlocked states).
-      const selfR = resolveRated(t, code);
-      const selfId = selfR.id;
-      const games = await teamGames(state, t.team_nbr, SEASON, pages);
-      st.parsed += games.length;
-
-      for (const g of games) {
-        if (g.isOvertime) st.ot++;
-        if (g.isForfeit) st.ff++;
-        if (g.teamScore === null) { st.noResult++; continue; }   // nothing to import
-
-        // BY TEAM NUMBER FIRST (resolve.js resolveOpponentGame): the opponent cell's link
-        // names the team, and a refusal there is final. Only an unlinked opponent, or a
-        // number in none of our feeds, falls back to the NAME: same state first — teams,
-        // then curated aliases — then the whole roster ONLY if exactly one team answers
-        // (finding 3: a last-wins global lookup is how Idaho's Mountain View became
-        // Washington's). Several → refused as ambiguous, never picked.
-        const oppR = resolveOpponentGame(g, code, byNbr);
-        let oppId = oppR.id;
-        if (oppR.by === 'number') st.oppByNumber++;
-        else { st.oppByName++; if (oppR.nameWhy === 'no-link') st.oppNoLink++; else st.oppNotInFeeds++; }
-
-        // PLACEHOLDER WITH PROVENANCE. An opponent outside our coverage still played a
-        // real game against a team we are importing, and dropping it would hide a real
-        // result from the season we are importing to show. It becomes a team with NO
-        // STATE — LaxNumbers publishes no state for an opponent string, and inventing
-        // one would be the guess this rule exists to forbid. A stateless team renders
-        // as a plain opponent name with no out-of-state tag, which is honest: we know
-        // who they played, not where they are from.
-        // LOCKED states never create one: the opponent falls through to unresolved. Nor
-        // does a refused TEAM NUMBER: that opponent is a rated team we could not attach,
-        // and a placeholder would be the name fallback by another route.
-        if (selfId && !oppId && !locked && oppR.by === 'name' && oppR.reason === 'unknown') {
-          // A RULED origin, or NULL. Never a guess — see data/placeholder-states.json.
-          const ruling = RULINGS.get(norm(g.opponentRaw)) || null;
-          oppId = await createTeam(ctx, g.opponentRaw, ruling ? ruling.state : null, null,
-                                   'unresolved opponent');
-          st.placeholders++;
-          if (ruling) st.ruled++; else st.untagged++;
-        }
-        if (!selfId || !oppId) {
-          st.unresolved++;
-          const raw = !selfId ? t.name : g.opponentRaw;
-          const key = `${code}|${raw}`;
-          const e = report.unresolved.get(key) ?? { state: code, raw, count: 0, samples: [] };
-          e.count++;
-          const why = !selfId ? selfR : oppR;
-          if (why.reason === 'ambiguous') e.ambiguous = why.candidates.map(label).join(' | ');
-          if (why.reason === 'foreign-unruled') e.foreign = `tagged ${why.rowState}; matches ${why.candidates.map(label).join(' | ')} only through the feed state`;
-          if (selfId && oppR.by === 'number') e.number = `t=${oppR.nbr} is "${oppR.ratedName}" in ${oppR.feed}'s feed — ${oppR.reason}; the name was not tried`;
-          if (e.samples.length < 2) e.samples.push(`${g.date} ${t.name} ${g.teamScore}-${g.oppScore} ${g.opponentRaw}`);
-          report.unresolved.set(key, e);
-          continue;
-        }
-        st.resolved++;
-
-        const [homeId, awayId] = g.isHome ? [selfId, oppId] : [oppId, selfId];
-        const lo = Math.min(homeId, awayId), hi = Math.max(homeId, awayId);
-        const runKey = `${g.date}|${lo}|${hi}`;
-        if (ctx.seenThisRun.has(runKey)) { st.mirrored++; continue; }
-        ctx.seenThisRun.add(runKey);
-
-        // RULED OUT — never imported, whatever the database holds. Checked before the
-        // existence lookup so the ruling is reported even if someone re-created the row.
-        const ruling = ctx.ix.ruledOut(SEASON, g.date, homeId, awayId);
-        if (ruling) {
-          st.ruledOut++;
-          console.log(`      ruled out: ${g.date} ${label(homeId)} v ${label(awayId)} ` +
-                      `${g.isHome ? g.teamScore : g.oppScore}-${g.isHome ? g.oppScore : g.teamScore}` +
-                      ` — ruling ${ruling.ruling}, not imported`);
-          continue;
-        }
-
-        const [[existing]] = (homeId < 0 || awayId < 0) ? [[null]] : await c.execute(
-          `SELECT id, canonical_source FROM games
-            WHERE season = ? AND game_date = ?
-              AND LEAST(home_team_id, away_team_id) = ?
-              AND GREATEST(home_team_id, away_team_id) = ? LIMIT 1`,
-          [SEASON, g.date, lo, hi]);
-        if (existing) {                                          // cross-border row already ours
-          st.matchedExisting++;
-          const src = existing.canonical_source ?? 'null';
-          st.matchedBySource[src] = (st.matchedBySource[src] ?? 0) + 1;
-          continue;
-        }
-        st.wouldInsert++;
-
-        if (ctx.commit) await insertGame(c, SEASON, g, homeId, awayId);
-      }
-      await politeness();
+    const list = [];
+    for (const t of ratings.get(code)) {
+      await politeness(http);
+      list.push({ t, games: await teamGames(state, t.team_nbr, SEASON, pages, http, counter) });
     }
+    pagesByState.set(code, { list, pages });
+    console.log(`[LaxNumbers:${code}] ${pages.replayed ? `${pages.replayed} team page(s) REPLAYED from ${http.dir}`
+      : `${pages.ok} team page(s) 200` + (pages.ok ? `, cf-ray ${pages.firstRay} … ${pages.lastRay}` : '')}`);
+  }
+
+  // ══ PHASE 2b: games, one transaction per state. ══
+  const feedKeys = new Set();        // every resolved game LaxNumbers lists, for the prune
+  const readTeams = new Set();       // teams whose page was read and fully resolved
+  const teamOf = id => ({ slug: byId.get(id)?.slug ?? null, state: teamState.get(id) ?? null });
+
+  for (const code of STATES) {
+    const state = getState(code);
+    const { list } = pagesByState.get(code);
+    const today = todayIn(state.timeZone);
+    const locked = ROSTER_LOCKED.has(code);
+    const st = { teams: list.length, gpTotal: 0, parsed: 0, resolved: 0, unresolved: 0,
+                 noResult: 0, scheduled: 0, ot: 0, ff: 0, mirrored: 0, ruledOut: 0, oregon: 0,
+                 inserted: 0, updated: 0, filled: 0, unchanged: 0,
+                 conflictGames: 0, conflictFields: 0, flipped: 0,
+                 time: { stored: 0, 'no-time': 0, 'no-zone': 0, unreadable: 0, nonexistent: 0, 'other-day': 0 },
+                 oppByNumber: 0, oppByName: 0, oppNoLink: 0, oppNotInFeeds: 0,
+                 matchedBySource: {}, samples: { conflict: [], flipped: [], update: [], fill: [] } };
+    const sample = (k, line) => { if (st.samples[k].length < 25) st.samples[k].push(line); };
+
+    if (ctx.commit) await c.beginTransaction();
+    try {
+      for (const { t, games } of list) {
+        st.gpTotal += t.gp || 0;
+        // The rated team itself must exist in OUR roster; if it does not, that is an
+        // unresolved ROSTER entry, reported the same way and never invented. Locked or
+        // not, the same both-states rule as phase 1.
+        const selfR = resolveRated(t, code);
+        const selfId = selfR.id;
+        st.parsed += games.length;
+        let pageClean = selfId != null && selfId > 0;
+
+        for (const g of games) {
+          if (g.isOvertime) st.ot++;
+          if (g.isForfeit) st.ff++;
+          // "-" means scheduled, cancelled or never played. Today or later in the state's
+          // zone it is a fixture (flag 4); earlier, there is nothing to import.
+          const isFixture = g.teamScore === null;
+          if (isFixture && g.date < today) { st.noResult++; continue; }
+
+          // BY TEAM NUMBER FIRST (resolve.js resolveOpponentGame); the name only for an
+          // unlinked opponent or a number in none of our feeds. A refusal is final.
+          const oppR = resolveOpponentGame(g, code, byNbr);
+          const oppId = oppR.id;
+          if (oppR.by === 'number') st.oppByNumber++;
+          else { st.oppByName++; if (oppR.nameWhy === 'no-link') st.oppNoLink++; else st.oppNotInFeeds++; }
+
+          // NO PLACEHOLDERS (flag 1, 2026-11-14). An opponent we cannot resolve is logged
+          // to unresolved_aliases with the game as context, and the game waits for a
+          // ruling. The next pass after the ruling imports it.
+          if (!selfId || !oppId) {
+            st.unresolved++; pageClean = false;
+            const raw = !selfId ? t.name : g.opponentRaw;
+            const key = `${code}|${raw}`;
+            const e = report.unresolved.get(key) ?? { state: code, raw, count: 0, samples: [] };
+            e.count++;
+            const why = !selfId ? selfR : oppR;
+            if (why.reason === 'ambiguous') e.ambiguous = why.candidates.map(label).join(' | ');
+            if (why.reason === 'foreign-unruled') e.foreign = `tagged ${why.rowState}; matches ${why.candidates.map(label).join(' | ')} only through the feed state`;
+            if (selfId && oppR.by === 'number') e.number = `t=${oppR.nbr} is "${oppR.ratedName}" in ${oppR.feed}'s feed — ${oppR.reason}; the name was not tried`;
+            if (e.samples.length < 2) e.samples.push(`${g.date} ${t.name} ${g.teamScore ?? '-'}-${g.oppScore ?? '-'} ${g.opponentRaw}`);
+            report.unresolved.set(key, e);
+            continue;
+          }
+          st.resolved++;
+
+          const [homeId, awayId] = g.isHome ? [selfId, oppId] : [oppId, selfId];
+          const lo = Math.min(homeId, awayId), hi = Math.max(homeId, awayId);
+          const runKey = `${g.date}|${lo}|${hi}`;
+          feedKeys.add(runKey);
+          if (ctx.seenThisRun.has(runKey)) { st.mirrored++; continue; }
+          ctx.seenThisRun.add(runKey);
+          const tag = `${g.date} ${label(homeId)} v ${label(awayId)}`;
+
+          // RULED OUT — never imported, whatever the database holds.
+          const ruling = ctx.ix.ruledOut(SEASON, g.date, homeId, awayId);
+          if (ruling) {
+            st.ruledOut++;
+            console.log(`      ruled out: ${tag} ${g.isHome ? g.teamScore : g.oppScore}-${g.isHome ? g.oppScore : g.teamScore}` +
+                        ` — ruling ${ruling.ruling}, not imported`);
+            continue;
+          }
+          // OREGON IS OHSLA'S (flag 5). Nothing written for a game with an Oregon side:
+          // not an insert, not a fill, not a source row.
+          if (teamState.get(homeId) === 'OR' || teamState.get(awayId) === 'OR') { st.oregon++; continue; }
+
+          // The time, read in the HOME team's zone, stored as Pacific wall-clock.
+          const tp = toPacific(g.date, g.time, teamZone(teamOf(homeId), ctx.zoneOverrides));
+          let dt = tp.value;
+          // A Pacific time on another day than game_date would put dateKey and datetime
+          // on different days. Not stored; expected never (a Mountain game before 1 AM).
+          if (dt && dt.slice(0, 10) !== g.date) { st.time['other-day']++; dt = null; }
+          else if (dt) st.time.stored++; else st.time[tp.why]++;
+
+          const inc = {
+            homeId, awayId, dt,
+            homeScore: isFixture ? null : (g.isHome ? g.teamScore : g.oppScore),
+            awayScore: isFixture ? null : (g.isHome ? g.oppScore : g.teamScore),
+            isOvertime: !isFixture && g.isOvertime, isForfeit: !isFixture && g.isForfeit,
+            status: isFixture ? 'scheduled' : 'completed',
+          };
+          if (isFixture) st.scheduled++;
+          const existing = (homeId < 0 || awayId < 0) ? null : await findExisting(c, SEASON, g.date, lo, hi);
+          if (existing) {
+            const src = existing.canonical_source ?? 'null';
+            st.matchedBySource[src] = (st.matchedBySource[src] ?? 0) + 1;
+          }
+          const d = decide(inc, existing);
+          const names = { home: g.isHome ? t.name : g.opponentRaw, away: g.isHome ? g.opponentRaw : t.name };
+          if (d.flipped) { st.flipped++; sample('flipped', `${tag}: row has home ${label(existing.home_team_id)}, LaxNumbers says ${label(homeId)}`); }
+          if (d.conflicts.length) {
+            st.conflictGames++; st.conflictFields += d.conflicts.length;
+            for (const x of d.conflicts) sample('conflict', `#${existing.id} ${tag} ${x.field}: ${x.owner} ${x.owner_value} vs laxnumbers ${x.other_value}`);
+          }
+          const setText = () => Object.entries(d.set).map(([k, v]) => `${k}=${v}`).join(' ');
+
+          if (d.action === 'insert') st.inserted++;
+          if (d.action === 'update') { st.updated++; sample('update', `#${existing.id} ${tag}: ${setText()}`); }
+          if (d.action === 'fill') { st.filled++; sample('fill', `#${existing.id} ${tag} (${existing.canonical_source}): ${setText()}`); }
+          if (d.action === 'none') st.unchanged++;
+          if (!ctx.commit) continue;
+
+          const gameId = d.action === 'insert' ? await insertGame(c, SEASON, g.date, inc) : existing.id;
+          if (d.action === 'update' || d.action === 'fill') await applySet(c, gameId, d.set, d.action === 'fill');
+          await logConflicts(c, gameId, d.conflicts);
+          await upsertSourceRecord(c, gameId, g.date, inc, names);
+        }
+        if (pageClean) readTeams.add(selfId);
+      }
+      if (ctx.commit) await c.commit();
+    } catch (err) {
+      if (ctx.commit) await c.rollback();
+      throw err;
+    }
+
     report.perState[code] = st;
-    console.log(`[LaxNumbers:${code}] ${pages.ok} team page(s) 200` +
-                (pages.ok ? `, cf-ray ${pages.firstRay} … ${pages.lastRay}` : ''));
     console.log(`  ${code}: ${st.teams} rated teams, gp total ${st.gpTotal}, parsed ${st.parsed}`);
-    console.log(`      resolved ${st.resolved}  unresolved ${st.unresolved}  ` +
-                `matched-existing ${st.matchedExisting}  would-insert ${st.wouldInsert}  ruled-out ${st.ruledOut}`);
-    console.log(`      OT ${st.ot}  forfeits ${st.ff}  no-result ${st.noResult}`);
+    console.log(`      resolved ${st.resolved}  unresolved ${st.unresolved}  ruled-out ${st.ruledOut}  oregon-skipped ${st.oregon}`);
+    console.log(`      ${ctx.commit ? '' : 'would: '}insert ${st.inserted} (scheduled ${st.scheduled})  update ${st.updated}  ` +
+                `fill ${st.filled}  unchanged ${st.unchanged}`);
+    console.log(`      conflicts ${st.conflictFields} field(s) on ${st.conflictGames} game(s)  home/away disagreements ${st.flipped}`);
+    console.log(`      times: stored ${st.time.stored}  blank ${st.time['no-time']}  zone unknown ${st.time['no-zone']}  ` +
+                `unreadable ${st.time.unreadable}  nonexistent ${st.time.nonexistent}  other Pacific day ${st.time['other-day']}`);
+    console.log(`      OT ${st.ot}  forfeits ${st.ff}  no-result (past "-") ${st.noResult}`);
     console.log(`      opponents by team number ${st.oppByNumber}, by name ${st.oppByName} ` +
                 `(no link ${st.oppNoLink}, number in no feed ${st.oppNotInFeeds})`);
-    // Locked states only, so an unlocked state's report is unchanged line for line.
-    if (locked) {
-      const by = Object.entries(st.matchedBySource).sort((a, b) => b[1] - a[1])
-        .map(([s, n]) => `${s} ${n}`).join(', ') || 'none';
-      console.log(`      matched-existing by canonical_source: ${by}`);
+    const by = Object.entries(st.matchedBySource).sort((a, b) => b[1] - a[1]).map(([s, n]) => `${s} ${n}`).join(', ') || 'none';
+    console.log(`      existing rows by canonical_source: ${by}`);
+    for (const [k, title] of [['conflict', 'conflict'],
+                              ['flipped', 'home/away'], ['fill', 'fill'], ['update', 'update']]) {
+      const n = { conflict: st.conflictFields, flipped: st.flipped, fill: st.filled, update: st.updated }[k];
+      st.samples[k].forEach(l => console.log(`        ${title}: ${l}`));
+      if (n > st.samples[k].length) console.log(`        … ${n - st.samples[k].length} more ${title} line(s)`);
     }
+    if (locked) console.log(`      (roster locked: matched only, nothing created)`);
   }
+
+  // ══ AFTER THE WRITES: vanished fixtures, stale marking. ══
+  const pr = await pruneVanished(c, SEASON, readTeams, feedKeys, ctx.commit);
+  if (pr.refused) console.log(`  PRUNE REFUSED: ${pr.candidates} vanished fixture(s) vs ${feedKeys.size} feed games — feed looks partial`);
+  else console.log(`  prune: ${ctx.commit ? '' : 'would remove '}${pr.pruned.length} laxnumbers fixture(s) no longer listed` +
+                   (pr.pruned.length ? `: ${pr.pruned.map(x => `#${x.id} ${x.d}`).join(', ')}` : ''));
+  report.pruned = pr;
 }
 
 module.exports = { runPhases };
