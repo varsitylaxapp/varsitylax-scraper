@@ -346,3 +346,83 @@ The rehearsal is the gate that lets a production window be trusted. A gate that
 under-predicts by one row of correct data is benign this time; the same fidelity gap
 could as easily hide a row that is not benign. The delta stays on the ledger until it has
 a name.
+
+---
+
+## WHSBLA takeover of LaxNumbers rows — `import-whsbla.js` fixes
+
+**Deferred 2026-11-15** with diff 6 (`caeec1d` on `laxnumbers-games-core`).
+
+**Trigger: before the first 2027 WHSBLA export is imported.**
+
+Diff 6 lets LaxNumbers insert a Washington game WHSBLA does not have yet. The plan is
+that a later WHSBLA export takes the row over: `whsbla` (90) outranks `laxnumbers` (50)
+in `game_source_priority`. A staging fixture on 2026-11-15 showed that this only half
+works today.
+
+| fixture | result |
+|---|---|
+| A: Roosevelt @ Snohomish, 2026-03-17, both sources agree on home | one row, now WHSBLA's ✅ |
+| B: Snohomish v Juanita, 2026-04-01, sources disagree on home, **prod schema** | **duplicate row**, teams reversed ❌ |
+| B with section-i applied | one row, but **scores reversed: wrong winner** ❌ |
+
+Why: the takeover branch is `INSERT … ON DUPLICATE KEY UPDATE`. On production's
+orientation-dependent `uq_game` a reversed game is a new key, so it inserts. With
+section-i the key matches, but the update list omits `home_team_id`/`away_team_id`, so
+WHSBLA's scores land on LaxNumbers' orientation.
+
+### What it needs
+
+1. **Take over by row id.** When the lookup finds a lower-priority row, `UPDATE games …
+   WHERE id = existing.id`, setting WHSBLA's home and away teams along with scores, time,
+   type and status. It works whatever the key is.
+2. **Conflict cleanup on takeover.** Log the home/away change to `source_conflicts`, and
+   resolve or delete rows whose `owner_source` was the previous owner. They describe
+   ownership that no longer exists.
+3. **One transaction.** Writes are autocommit today, and the playoff-bracket check aborts
+   with exit 1 *after* the games are written. Wrap the run in a transaction, or run the
+   check before any write.
+4. **A real input path.** `SP` is a scratchpad folder from an earlier session that no longer
+   exists. Take `--input=DIR`. `wa-classes.json` has no source in the repo; it
+   only feeds division assignment, so either commit it or derive it.
+5. **A 2027 game importer.** `import-whsbla.js` is a 2026 one-off and
+   `import-whsbla-2027.js` only seeds divisions. Nothing can import 2027 WHSBLA games, so
+   no takeover can happen until one exists. Fixes 1–4 belong in it.
+
+Section-i on production is the backstop for fix 1. It is planned as a production window
+of its own, not part of this entry.
+
+### Watch for
+
+- Re-run fixtures A and B against the new importer: delete the WHSBLA row on staging,
+  let LaxNumbers insert it, then import the WHSBLA export containing just that game. B must end as one WHSBLA-owned row with Juanita at home, 7–14.
+- A LaxNumbers run after the takeover must insert 0 rows.
+
+---
+
+## Forfeit flag: production has 0 of the 10 WHSBLA forfeits
+
+**Found 2026-11-15** while exporting WHSBLA/LaxNumbers conflicts for WHSBLA.
+
+Section J (`3607fa8`, 2026-07-29) made `is_forfeit` a column, backfilled it on 10 games
+from `status_note = 'note=Forfeit'`, and removed the `note=` prefix.
+`docs/api-contract.md` says "10 games in 2026, all WHSBLA-sourced."
+
+The prod dump of 2026-11-15 disagrees. Every WHSBLA game with a forfeit note has
+`is_forfeit = 0`, and the notes still read `note=Forfeit`. So `isForfeit` is false for
+every game in the app, and those 10 games count as ordinary results.
+
+Leading explanation, not yet proven: `import-whsbla.js` still writes `note=…` and never
+sets `is_forfeit`. If window #3 (stage c) imported WHSBLA's games into production after
+section J's column existed, the backfill would not have covered them. The other
+possibility is that section J's backfill never ran on production.
+
+Diff 6 logs 9 of these games as `is_forfeit` conflicts (LaxNumbers says forfeit, our
+row says not). They are our gap, not WHSBLA's, and were kept out of the CSV for WHSBLA
+(`patches/whsbla-laxnumbers-conflicts-2026-internal-forfeit-flag.csv`).
+
+### What it needs
+
+Find which explanation is true, then a reviewed backfill (`is_forfeit = 1`, note
+prefix removed) in a production window, plus `import-whsbla.js` setting `is_forfeit`
+from the notation. The importer part goes with the takeover fixes above.
