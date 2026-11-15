@@ -1,0 +1,18 @@
+{
+  "_purpose": "Teams whose home games are not in their state's registry time zone. Read by src/laxnumbers-games/time.js: a LaxNumbers game time is read in the HOME team's zone. Every other team uses its state's zone. IANA names only.",
+  "_status": "CONFIRMED by Spencer 2026-11-15, as proposed with diff 6 on 2026-11-14. Each basis is the school's town; none has been checked against a LaxNumbers venue, which the pages do not publish (Location is n/a).",
+  "teams": [
+    { "slug": "coeur_d_alene_id",          "zone": "America/Los_Angeles", "basis": "Coeur d'Alene, Idaho panhandle (Pacific time)" },
+    { "slug": "lake_city_id",              "zone": "America/Los_Angeles", "basis": "Coeur d'Alene, Idaho panhandle" },
+    { "slug": "sandpoint_id",              "zone": "America/Los_Angeles", "basis": "Sandpoint, Idaho panhandle" },
+    { "slug": "logos_id",                  "zone": "America/Los_Angeles", "basis": "Moscow, Idaho (Pacific time)" },
+    { "slug": "immaculate_conception_id",  "zone": "America/Los_Angeles", "basis": "Post Falls, Idaho panhandle (confirmed 2026-11-15)" },
+    { "slug": "lewis_clark_id",            "zone": "America/Los_Angeles", "basis": "LaxNumbers tags it WA (Spokane); rostered in Idaho as a league member" },
+    { "slug": "gonzaga_prep_id",           "zone": "America/Los_Angeles", "basis": "Spokane, WA; rostered in Idaho as a league member (data/foreign-row-rulings.json, 2026-11-13)" },
+    { "slug": "mount_spokane_id",          "zone": "America/Los_Angeles", "basis": "Mead, WA (Spokane); rostered in Idaho as a league member" },
+    { "slug": "spokane_valley_id",         "zone": "America/Los_Angeles", "basis": "Spokane Valley, WA; rostered in Idaho as a league member" },
+    { "slug": "bozeman_black_id",          "zone": "America/Denver",      "basis": "LaxNumbers tags it MT (Bozeman); rostered in Idaho. Same rules as America/Boise; listed so the zone is the right one" },
+    { "slug": "northwest_black_id",        "zone": "America/Denver",      "basis": "LaxNumbers tags it MT; rostered in Idaho" },
+    { "slug": "jackson_hole_id",           "zone": "America/Denver",      "basis": "LaxNumbers tags it WY (Jackson); rostered in Idaho" }
+  ]
+}

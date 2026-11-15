@@ -349,7 +349,7 @@ The authoritative proof for any change is two captures taken minutes apart again
 same database — before and after — which holds the data still so `CHANGED` must be zero.
 
 Fields added under this policy so far: `gameType`, `isForfeit`, `division`, `bracketKey`,
-`round`, `advancesTo`, `currentSeason` (`/states`, 2026-11-12).
+`round`, `advancesTo`, `currentSeason` (`/states`, 2026-11-12), `timeZone` (game objects, 2026-11-15).
 
 ---
 
@@ -359,10 +359,28 @@ Fields added under this policy so far: `gameType`, `isForfeit`, `division`, `bra
 |---|---|---|
 | `date` (all game endpoints) | ISO instant, e.g. `2026-04-29T07:00:00.000Z` | Represents a Pacific calendar DAY, not an instant. Take the first 10 characters. See §1.3. |
 | `datetime` | ISO instant or null | The actual kickoff. Null when no time is published. |
+| `timeZone` (every game object) | IANA zone name or null, e.g. `America/Boise` | The HOME team's zone. Null when unknown. See below. |
 | `advancesTo.date` | `YYYY-MM-DD` | Bare calendar day. |
 | `finalDate` (`/playoff-formats`) | `YYYY-MM-DD` | Bare calendar day. |
 | `updated` (`/rankings/*`) | ISO instant with `Z` | Snapshot capture time. |
 | `lastGameWrite`, `lastSnapshot` (`/health`) | ISO with **real offset**, e.g. `2026-07-28T22:09:59-07:00` | The only endpoint emitting true offsets. |
+
+**Showing a kickoff in local time: `timeZone`.** `datetime` is Pacific wall clock with a
+`Z` suffix (see `/health` below), whichever state the game is in. A Boise game at 7:45pm
+Mountain is `…T18:45:00.000Z`. To show it as 7:45pm, read `datetime`'s wall clock as
+`America/Los_Angeles`, giving an instant, and format that instant in the game's `timeZone`.
+Do not slice the hours out of `datetime` and print them: that shows Pacific time for every
+game.
+
+- `timeZone` is the **home** team's zone: the state's zone from the registry, except teams
+  listed in `data/team-timezones.json` (the Idaho panhandle and the Spokane schools rostered
+  in Idaho are Pacific; Bozeman and Jackson Hole are Mountain).
+- Out-of-state home teams get their state's main zone (Texas → `America/Chicago`).
+- Null means unknown: fall back to Pacific, which is what every client did before the field
+  existed.
+- `dateKey` is the game's local calendar day, so it already agrees with `timeZone`.
+- The field is present on games with no `datetime` too, so a client does not need to
+  special-case TBD games.
 
 **Why `/health` differs.** Elsewhere the database's Pacific wall-clock times are parsed
 into a Date's UTC fields and re-emitted with a `Z` that is technically a lie about the

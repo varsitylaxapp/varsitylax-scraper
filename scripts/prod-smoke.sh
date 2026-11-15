@@ -39,6 +39,8 @@ EXPECT_CURRENT_SEASON="${EXPECT_CURRENT_SEASON:-2026}"
 #   =0     list/dict: EXACTLY 0 — an assertion that a thing is empty
 #   =ok    scalar: equals
 #   ~text  scalar: contains
+#   %f:v   list of objects: not empty, EVERY element has key f, and at least one has f == v
+#          (a field check: a deploy without the field fails, not just a missing value)
 #
 # A MISSING EXPECTATION IS A SPEC FAILURE, not a permissive default. A scalar with a bare
 # number is also refused — a minimum is meaningless against a string.
@@ -107,6 +109,13 @@ CHECKS=(
   "/api/v2/schedule/all?season=$SEASON&state=MT|200|games|25"
   "/api/v2/schedule/all?season=$SEASON&state=NV|200|games|110"
   "/api/v2/teams?season=$SEASON&state=ID|200|teams|28"
+  # ── timeZone on game objects (additive, 2026-11-15). FAIL until the API release that
+  # adds it is deployed: run with SMOKE_SKIP or expect these four to fail before then.
+  # Coeur d'Alene is an Idaho team in Pacific time (data/team-timezones.json).
+  "/api/v2/schedule/all?season=$SEASON|200|games|%timeZone:America/Los_Angeles"
+  "/api/v2/schedule/all?season=$SEASON&state=ID|200|games|%timeZone:America/Boise"
+  "/api/v2/schedule/all?season=$SEASON&state=AZ|200|games|%timeZone:America/Phoenix"
+  "/api/v2/schedule/team/coeur_d_alene_id?season=$SEASON|200|games|%timeZone:America/Los_Angeles"
   "/api/rankings/laxnumbers?season=$SEASON|200|rankings|41"
   "/api/schedule/all?season=$SEASON|200|games|600"
   "/api/schedule/playoffs|200|games|38"
@@ -141,7 +150,16 @@ k='$key'
 if k not in d: print('MISSING KEY '+k); raise SystemExit
 v=d[k]
 e=os.environ['EXPECT'].strip()
-if isinstance(v,(list,dict)):
+if e.startswith('%'):
+    f,sep,want=e[1:].partition(':')
+    if not sep or not f: print('SPEC %field:value needs a colon'); raise SystemExit
+    if not isinstance(v,list) or not v: print(f'EXPECTED a non-empty list of {k}'); raise SystemExit
+    lacking=sum(1 for x in v if not isinstance(x,dict) or f not in x)
+    if lacking: print(f'EXPECTED {f} on every {k}: {lacking} of {len(v)} lack it'); raise SystemExit
+    hits=sum(1 for x in v if str(x.get(f))==want)
+    if not hits: print(f'EXPECTED some {k} with {f}=={want!r}, got none of {len(v)}'); raise SystemExit
+    print(f'{len(v)} {k}, {f} on all, {hits} = {want}')
+elif isinstance(v,(list,dict)):
     n=len(v)
     if e.startswith('='):
         if n != int(e[1:]): print(f'EXPECTED exactly {e[1:]} {k}, got {n}'); raise SystemExit
@@ -162,7 +180,7 @@ else:
   if [[ ",$want," != *",$code,"* ]]; then
     printf "  FAIL  %-52s %s (want %s)  %s\n" "$path" "$code" "$want" "$(printf '%s' "$body" | head -c 70)"
     fail=$((fail+1))
-  elif [ -z "$detail" ] || [[ "$detail" == MISSING* ]] || [[ "$detail" == UNPARSEABLE ]] || [[ "$detail" == TOO\ FEW* ]] || [[ "$detail" == EXPECTED* ]] || [[ "$detail" == SCALAR* ]]; then
+  elif [ -z "$detail" ] || [[ "$detail" == MISSING* ]] || [[ "$detail" == UNPARSEABLE ]] || [[ "$detail" == TOO\ FEW* ]] || [[ "$detail" == EXPECTED* ]] || [[ "$detail" == SCALAR* ]] || [[ "$detail" == SPEC* ]]; then
     printf "  FAIL  %-52s %s but %s\n" "$path" "$code" "${detail:-empty body}"
     fail=$((fail+1))
   else
