@@ -284,6 +284,43 @@ wrote a garbage row (removed, verified). A should-fail probe is exactly the case
 where the environment surprises you. `START TRANSACTION` … `ROLLBACK`, always,
 no exceptions.
 
+### ⚠️ After every deploy: check the cron's first LaxNumbers run
+
+Railway places each deployment on its own host, and the host decides the outbound
+address. On 2026-11-14 cron deployment `40cc003a` left from **18.144.119.47 (Amazon)**
+and every run got a Cloudflare 403 challenge on all six states, while the API — same
+image, same region `us-west2`, on Railway's own network (152.55.177.94) — got 200.
+Deployment `93f8abd5` on 2026-11-12 failed the same way, and a new deployment cleared
+it. Over the 7 days before, every deployment either passed every run or failed every run.
+The code was not the cause either time.
+
+After **every** deploy of `varsitylax-cron` (a push, a redeploy, anything that makes a
+new deployment ID):
+
+1. **Read the first run.** It fires at the next even UTC hour (see above). Each state
+   logs `[LaxNumbers:<ST>] ✓` or `✗`, and every run logs one
+   `[LaxNumbers] outbound IPv4=<ip>` line, pass or fail.
+   ```
+   railway logs --service varsitylax-cron -n 500 <deployment-id> \
+     | grep -E '\[db\] target=|\[LaxNumbers'
+   ```
+2. **Record the IP and its owner** in the table below, every time, pass or fail:
+   `whois <ip> | grep -E '^(OrgName|NetName)'`.
+3. **If it was challenged** (403, `cf-mitigated=challenge`): redeploy the cron service
+   with no code change — `railway redeploy --service varsitylax-cron` (a *redeploy*,
+   which makes a new deployment; `railway restart` reuses the same one). Then go back to
+   step 1 for the new deployment. `/api/v2/health/laxnumbers` flags a state only after
+   3 failed runs in a row, so don't wait for it.
+
+Static outbound IPs would end this, but Railway offers them on the Pro plan only; this
+project is on Hobby (2026-11-14).
+
+| Date | Deployment | Outbound IPv4 | Owner | First run |
+|---|---|---|---|---|
+| 2026-11-12 | `93f8abd5` | not logged | — | 403 ×6 |
+| 2026-11-14 | `40cc003a` | 18.144.119.47 | Amazon (AT-88-Z) | 403 ×6 |
+| 2026-11-14 | `8a2985a4` (redeploy, no code change) | not logged (passes didn't log it yet) | — | 200 ×6 |
+
 ---
 
 ## Window #4-lite — AZ / ID / MT / NV game results
