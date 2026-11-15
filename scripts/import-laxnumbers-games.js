@@ -1,12 +1,19 @@
 #!/usr/bin/env node
 /**
- * Import one season of game results for the NON-CURATED states (AZ, ID, MT, NV) from
- * LaxNumbers. Washington may be DRY RUN only — see ROSTER_LOCKED below.
+ * Import one season of games from LaxNumbers for the states whose registry entry names it
+ * as `liveGames`: AZ, ID, MT and NV as the primary source, Washington FILL-ONLY (WHSBLA
+ * owns its games; LaxNumbers fills empty fields and logs disagreements). Never Oregon.
+ * The write rule is in src/laxnumbers-games/apply.js.
  *
  *   ./scripts/staging scripts/import-laxnumbers-games.js --state=ID
  *   ./scripts/staging scripts/import-laxnumbers-games.js --state=ID --season=2027
  *   ./scripts/staging scripts/import-laxnumbers-games.js --state=ID --commit
+ *   ./scripts/staging scripts/import-laxnumbers-games.js --state=WA,AZ --record=DIR
+ *   ./scripts/staging scripts/import-laxnumbers-games.js --state=WA,AZ --replay=DIR --commit
  *   node scripts/import-laxnumbers-games.js --state=ID --stage-c --commit     (prod)
+ *
+ * --record=DIR saves every LaxNumbers response; --replay=DIR reads them back and makes no
+ * request at all (a missing file is an error). Live requests are spaced 1.1 s apart.
  *
  * SEASON: --season=YYYY, else $SEASON, else 2026. The resolved value and where it came
  * from are printed in the banner. Anything outside 2000–2100 is refused.
@@ -133,10 +140,18 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 const pool = require('../src/db');
-const { importLaxNumbersGames, recordUnresolved } = require('../src/laxnumbers-games');
-const { rosterLockedStates } = require('../src/config/states');
+const { importLaxNumbersGames } = require('../src/laxnumbers-games');
+const { rosterLockedStates, getState } = require('../src/config/states');
 
 const COMMIT  = process.argv.includes('--commit');
+const argVal  = k => { const a = process.argv.filter(x => x.startsWith(`--${k}=`));
+  if (a.length > 1) { console.error(`FATAL: --${k} given more than once`); process.exit(1); }
+  return a.length ? a[0].slice(k.length + 3) : null; };
+const RECORD  = argVal('record'), REPLAY = argVal('replay');
+if (RECORD && REPLAY) { console.error('FATAL: --record and --replay together'); process.exit(1); }
+const HTTP = REPLAY ? { mode: 'replay', dir: REPLAY, spacingMs: 0 }
+           : RECORD ? { mode: 'record', dir: RECORD, spacingMs: 1100 }
+           :          { mode: 'live',   dir: null,   spacingMs: 1100 };
 const STAGE_C = process.argv.includes('--stage-c');
 const STATES  = process.argv.filter(a => a.startsWith('--state='))
   .flatMap(a => a.slice(8).split(',')).map(x => x.trim().toUpperCase()).filter(Boolean);
@@ -166,13 +181,16 @@ const { SEASON, SEASON_FROM } = (() => {
  * lock goes to the unresolved list — never a placeholder, never a guess.
  *
  * Which states are locked is the registry's `rosterLocked` (src/config/states.js):
- * Oregon (OHSLA) and Washington (WHSBLA). Dry run only for now: --commit is refused below
- * until a write path for a locked state has been reviewed on its own.
+ * Oregon (OHSLA) and Washington (WHSBLA).
+ *
+ * --commit is refused for any state whose registry `liveGames` is not LaxNumbers — that is
+ * Oregon (flag 5). In Washington LaxNumbers only fills empty fields on WHSBLA's rows, and
+ * inserts a game WHSBLA does not have; a later WHSBLA import takes that row over.
  */
 const ROSTER_LOCKED = new Set(rosterLockedStates());
-const LOCKED_HERE   = STATES.filter(s => ROSTER_LOCKED.has(s));
-if (COMMIT && LOCKED_HERE.length) {
-  console.error(`FATAL: --commit refused for roster-locked ${LOCKED_HERE.join(', ')} — dry run only.`);
+const NOT_OURS      = STATES.filter(s => getState(s)?.liveGames?.source !== 'laxnumbers');
+if (COMMIT && NOT_OURS.length) {
+  console.error(`FATAL: --commit refused for ${NOT_OURS.join(', ')} — LaxNumbers is not its live game source.`);
   process.exit(1);
 }
 
@@ -187,52 +205,50 @@ if (COMMIT && LOCKED_HERE.length) {
   console.log(`\n  target: ${pool.targetDescription}`);
   console.log(`  mode:   ${COMMIT ? 'COMMIT' : 'DRY RUN (writes nothing)'}`);
   console.log(`  season: ${SEASON} (${SEASON_FROM})`);
-  console.log(`  states: ${STATES.join(', ')}\n`);
+  console.log(`  states: ${STATES.join(', ')}`);
+  console.log(`  http:   ${HTTP.mode}${HTTP.dir ? ' ' + HTTP.dir : ''}${HTTP.spacingMs ? `, ${HTTP.spacingMs} ms between requests` : ''}\n`);
 
   try {
-    await c.beginTransaction();
+    // A dry run is wrapped in a transaction that is always rolled back, as a second
+    // guard. A commit is not: the core commits rosters and each state on its own.
+    if (!COMMIT) await c.beginTransaction();
 
-    const { ctx, report } = await importLaxNumbersGames({
-      c, commit: COMMIT, season: SEASON, states: STATES, rosterLocked: ROSTER_LOCKED });
+    const { report } = await importLaxNumbersGames({
+      c, commit: COMMIT, season: SEASON, states: STATES, rosterLocked: ROSTER_LOCKED, http: HTTP });
 
     // ── THE COUNT LADDER, fourth edition ──────────────────────────────────────
     // Every parsed row is accounted for. A row that is neither imported nor explained
     // is the thing this exists to catch — three previous count ladders each found one.
     console.log('\n  ── COUNT LADDER — every parsed row accounted for ──');
     for (const [code, st] of Object.entries(report.perState)) {
-      const explained = st.noResult + st.mirrored + st.matchedExisting + st.ruledOut + st.wouldInsert + st.unresolved;
+      const written = st.inserted + st.updated + st.filled + st.unchanged;
+      const explained = st.noResult + st.mirrored + st.unresolved + st.ruledOut + st.oregon + written;
       const gap = st.parsed - explained;
+      const row = (label, n, note = '') => console.log(`      ${label.padEnd(36)}${String(n).padStart(5)}${note ? '   ' + note : ''}`);
       console.log(`\n    ${code}`);
-      console.log(`      source gp total (ratings service) ${String(st.gpTotal).padStart(5)}`);
-      console.log(`      rows parsed from team pages       ${String(st.parsed).padStart(5)}`);
-      console.log(`        - no result ("-")               ${String(st.noResult).padStart(5)}`);
-      console.log(`        - the SAME game from the other   ${String(st.mirrored).padStart(5)}   (every game appears on both pages)`);
-      console.log(`          team's page`);
-      console.log(`        - matched an existing row       ${String(st.matchedExisting).padStart(5)}   (cross-border, NOT duplicated)`);
-      console.log(`        - ruled out, never imported     ${String(st.ruledOut).padStart(5)}   (data/ruled-out-games.json)`);
-      console.log(`        - unresolved, skipped           ${String(st.unresolved).padStart(5)}`);
-      console.log(`        = imported                      ${String(st.wouldInsert).padStart(5)}`);
-      console.log(`      UNEXPLAINED                       ${String(gap).padStart(5)}   ${gap === 0 ? 'ok' : '*** INVESTIGATE ***'}`);
-      // A GAME, not a row: every game appears on both teams' pages, and `mirrored` counts
-      // the second sighting. Each resolved game's FIRST sighting is matched, ruled out or
-      // imported, so those three alone count games. (This line used to add `mirrored`,
-      // which made it the resolved-ROW count.) Unresolved rows cannot be paired into
-      // games — their opponent has no id — so they stay a row count, on their own line.
-      console.log(`      distinct games (resolved)         ${String(st.matchedExisting + st.ruledOut + st.wouldInsert).padStart(5)}`);
-      console.log(`      unresolved rows (not paired)      ${String(st.unresolved).padStart(5)}`);
-      // parsed-vs-gp: each game appears on BOTH teams' pages, so both double-count.
+      row('source gp total (ratings service)', st.gpTotal);
+      row('rows parsed from team pages', st.parsed);
+      row('  - no result, past ("-")', st.noResult);
+      row('  - the SAME game, other team\'s page', st.mirrored, '(every game appears on both pages)');
+      row('  - unresolved, skipped', st.unresolved, '(unresolved_aliases; no placeholder)');
+      row('  - ruled out, never imported', st.ruledOut, '(data/ruled-out-games.json)');
+      row('  - Oregon side, owned by OHSLA', st.oregon, '(flag 5: not written)');
+      row(`  = ${COMMIT ? '' : 'would be '}inserted`, st.inserted, `(of which scheduled ${st.scheduled})`);
+      row(`  = ${COMMIT ? '' : 'would be '}updated (ours)`, st.updated);
+      row(`  = ${COMMIT ? '' : 'would be '}filled (another owner's)`, st.filled);
+      row('  = matched, nothing to change', st.unchanged);
+      row('UNEXPLAINED', gap, gap === 0 ? 'ok' : '*** INVESTIGATE ***');
+      row('distinct games (resolved)', st.ruledOut + st.oregon + written);
       const delta = st.parsed - st.gpTotal;
-      console.log(`      parsed − gp                       ${String(delta).padStart(5)}   ` +
-                  `(no-result ${st.noResult}, forfeits ${st.ff})`);
+      row('parsed − gp', delta, `(no-result ${st.noResult}, forfeits ${st.ff})`);
       if (delta !== 0) {
-        const hyp = st.noResult + st.ff;
-        console.log(`        hypothesis: no-result + forfeits = ${hyp} ` +
+        const hyp = st.noResult + st.scheduled + st.ff;
+        console.log(`        hypothesis: no-result + scheduled + forfeits = ${hyp} ` +
                     `${hyp === delta ? '→ MATCHES the delta' : '→ does NOT match; still open'}`);
       }
     }
 
-    // ── the long tail, for rulings ──
-    await recordUnresolved(ctx);
+    // The unresolved tail is printed and recorded by the core (src/laxnumbers-games/index.js).
 
     if (COMMIT) { await c.commit(); console.log('\n  COMMITTED\n'); }
     else        { await c.rollback(); console.log('\n  dry run — rolled back, nothing written\n'); }
