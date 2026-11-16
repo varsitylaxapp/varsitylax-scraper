@@ -6,6 +6,7 @@ const { scrapeLaxPower }   = require('./scrapers/laxpower');
 const { scrapeOHSLA }      = require('./scrapers/ohsla');
 const dualWrite            = require('./dual-write');
 const { enabledStates, DEFAULT_STATE } = require('./config/states');
+const { gamesJobConfig, runLaxNumbersGames } = require('./laxnumbers-games/cron');
 
 const SEASON = parseInt(process.env.SEASON || '2026');
 
@@ -13,6 +14,11 @@ const SEASON = parseInt(process.env.SEASON || '2026');
 const WRITE_MODE  = process.env.WRITE_MODE || 'legacy';
 const writeLegacy = WRITE_MODE !== 'v2';
 const writeV2     = WRITE_MODE !== 'legacy';
+
+// LaxNumbers game job (diff 8): OFF unless LAXNUMBERS_GAMES_STATES is set; writes only
+// with LAXNUMBERS_GAMES_COMMIT=1. Read once, here, so a bad value stops the process at
+// boot instead of failing quietly every run (src/laxnumbers-games/cron.js).
+const GAMES_JOB = gamesJobConfig(process.env);
 
 async function upsertLaxNumbers(rankings) {
   const sql = `
@@ -148,6 +154,11 @@ async function runAll() {
     console.error('[OHSLA] ✗', err.message);
     await logScrape('ohsla', 0, 'error', err.message);
   }
+
+  // ── LaxNumbers games — after OHSLA; OFF by default (diff 8) ────────────────
+  // Never throws: a failure is logged (and on a committing run written to scrape_log
+  // as source 'laxnumbers-games'), and the run still reaches [done].
+  await runLaxNumbersGames({ pool: db, config: GAMES_JOB, season: SEASON, logScrape });
 
   console.log('[done]\n');
 }
