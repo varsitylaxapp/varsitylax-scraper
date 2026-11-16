@@ -15,7 +15,8 @@ const fs = require('fs');
 const path = require('path');
 const { scrapeLaxNumbersTeamGames, fetchLaxNumbersRatingsRaw } = require('../scrapers/laxnumbers');
 
-const LIVE = { mode: 'live', dir: null, spacingMs: 120 };
+// 2 s between requests by default (diff 7): a full pass is ~150 requests, so ~5 minutes.
+const LIVE = { mode: 'live', dir: null, spacingMs: 2000 };
 
 function file(http, kind, key, season) {
   return path.join(http.dir, `${kind}-${key}-${season}.json`);

@@ -96,4 +96,4 @@ function todayIn(zone, now = Date.now()) {
   return `${w.y}-${pad(w.mo)}-${pad(w.d)}`;
 }
 
-module.exports = { toPacific, teamZone, loadOverrides, todayIn, isValidZone, PACIFIC, STATE_ZONES };
+module.exports = { toPacific, teamZone, loadOverrides, todayIn, instantOf, isValidZone, PACIFIC, STATE_ZONES };
