@@ -254,6 +254,40 @@ router.get('/health/laxnumbers', async (req, res) => {
   }
 });
 
+// ── GET /api/v2/health/laxnumbers-games ──────────────────────────────────────
+// For the uptime monitor, not the app (diff 9b). The cron's LaxNumbers GAME job, per
+// game-job state: 503 once a state's committing runs have failed THRESHOLD (3) times in a
+// row; 200 otherwise, including when the job is off and no state is listed. The warning
+// flags (overCapLastRun, unresolvedLastRun, missedDailyPass) never change the status.
+// Separate from /health/laxnumbers so that endpoint and its monitor keep their meaning.
+// Not in payload-baseline/: live timestamps. See src/scrape-health.js.
+const { liveGameStates } = require('./config/states');
+router.get('/health/laxnumbers-games', async (req, res) => {
+  try {
+    const states = await scrapeHealth.gamesHealth(db, liveGameStates('laxnumbers').map(s => s.code));
+    const failing = states.filter(s => s.consecutiveFailedRuns >= scrapeHealth.THRESHOLD).map(s => s.state);
+    res.status(failing.length ? 503 : 200).json({
+      status: failing.length ? 'failing' : 'ok',
+      threshold: scrapeHealth.THRESHOLD,
+      failing,
+      states: states.map(s => ({
+        state: s.state,
+        consecutiveFailedRuns: s.consecutiveFailedRuns,
+        lastSuccessAt: pacificISO(s.lastSuccessAt),
+        lastErrorAt: pacificISO(s.lastErrorAt),
+        lastErrorHttpStatus: s.lastErrorHttpStatus,
+        overCapLastRun: s.overCapLastRun,
+        unresolvedLastRun: s.unresolvedLastRun,
+        missedDailyPass: s.missedDailyPass,
+      })),
+    });
+  } catch (err) {
+    // No error text in this public body; the detail goes to the log.
+    console.error('[health/laxnumbers-games]', err);
+    res.status(500).json({ error: 'health check failed' });
+  }
+});
+
 // ── GET /api/v2/rankings/laxnumbers | laxpower ──────────────────────────────
 router.get('/rankings/laxnumbers', async (req, res) => {
   const season = parseInt(req.query.season || SEASON());
