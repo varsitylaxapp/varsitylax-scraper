@@ -20,6 +20,9 @@
 #   ./scripts/rehearse-on-prod-schema.sh --window2       # + window #2's migrations
 #   ./scripts/rehearse-on-prod-schema.sh --window3       # + stage (c): Washington
 #   ./scripts/rehearse-on-prod-schema.sh --window4       # + AZ/ID/MT/NV, INCLUDING DDL
+#   W6_REPLAY=<recordings> ./scripts/rehearse-on-prod-schema.sh --window6
+#                                                        # + section I, section N, forfeit
+#                                                        #   flags, Claremont alias
 #
 # A FRESH DUMP EVERY RUN. A cached dump answers "did HEAD work against prod as it was
 # whenever someone last looked", which is the question that produced the outage.
@@ -36,6 +39,13 @@ WINDOW3=0
 [[ " $* " == *" --window3 "* ]] && WINDOW3=1
 WINDOW4=0
 [[ " $* " == *" --window4 "* ]] && WINDOW4=1
+WINDOW6=0
+[[ " $* " == *" --window6 "* ]] && WINDOW6=1
+# Window #6 replays recorded LaxNumbers responses (import-laxnumbers-games.js --record):
+# its Washington dry runs make no request to LaxNumbers.
+if [ "$WINDOW6" = "1" ]; then
+  [ -n "${W6_REPLAY:-}" ] && [ -d "$W6_REPLAY" ] || { echo "--window6 needs W6_REPLAY=<dir of recorded LaxNumbers responses>"; exit 1; }
+fi
 
 # Window-3 expectations. Left blank on the FIRST rehearsal so the run PINS them; set
 # from that run's output thereafter, so later runs assert rather than observe.
@@ -84,6 +94,42 @@ or_feed() {
                WHERE g.season=2026 AND g.status<>'stale'
                  AND (ht.state='OR' OR at2.state='OR')"
 }
+
+# ── HEAD's API against the rehearsal container (step 7, and window #6's BEFORE capture) ──
+# The three defences documented at step 7 live here, so every boot gets all three.
+API_PORT=${API_PORT:-3010}
+boot_api() {
+  if lsof -nP -iTCP:$API_PORT -sTCP:LISTEN >/dev/null 2>&1; then
+    echo "   port $API_PORT is already in use — refusing to boot, because the smoke would"
+    echo "   silently interrogate whatever is already there. Free it or set API_PORT."
+    die "rehearsal API port occupied"
+  fi
+  API_BASE="http://localhost:$API_PORT"
+  PORT=$API_PORT node src/api.js > "$WORK/api.log" 2>&1 &
+  API_PID=$!
+  for i in $(seq 1 40); do curl -sf -o /dev/null --max-time 2 "$API_BASE/api/v2/states" && break; sleep 0.5; done
+  curl -sf -o /dev/null --max-time 3 "$API_BASE/api/v2/states" || { tail -20 "$WORK/api.log"; die "API did not boot"; }
+
+  API_DBLINE=$(grep -m1 "\[db\]" "$WORK/api.log")
+  [ -n "$API_DBLINE" ] || { tail -20 "$WORK/api.log"; die "API printed no [db] boot line — cannot confirm which database it opened"; }
+  echo "   $API_DBLINE"
+  case "$API_DBLINE" in
+    *target=REHEARSAL*) ;;
+    *) die "the booted API is NOT on the rehearsal database: $API_DBLINE" ;;
+  esac
+
+  # Truth anchor — same question, both sources, must agree.
+  API_OR=$(curl -sf --max-time 10 "$API_BASE/api/v2/schedule/all?season=2026&state=OR" \
+           | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).games.length))")
+  SQL_OR=$(mysh -N -e "SELECT COUNT(*) FROM $DBN.games g
+                         JOIN $DBN.teams ht  ON ht.id  = g.home_team_id
+                         JOIN $DBN.teams at2 ON at2.id = g.away_team_id
+                        WHERE g.season=2026 AND g.status<>'stale'
+                          AND (ht.state='OR' OR at2.state='OR')")
+  echo "   truth anchor — Oregon feed: API=$API_OR  container=$SQL_OR"
+  [ "$API_OR" = "$SQL_OR" ] || die "API ($API_OR) and rehearsal container ($SQL_OR) disagree — the API is serving a different database"
+}
+stop_api() { [ -n "$API_PID" ] && kill "$API_PID" 2>/dev/null; wait "$API_PID" 2>/dev/null; API_PID=""; }
 
 # ── 1. fresh prod dump ───────────────────────────────────────────────────────
 say "1. fresh prod dump  (READ ONLY)"
@@ -311,6 +357,114 @@ if [ "$WINDOW4" = "1" ]; then
     || die "geographic coherence flagged a team — a season may be on the wrong school"
 fi
 
+if [ "$WINDOW6" = "1" ]; then
+  export DB_TARGET=rehearsal
+  export REHEARSAL_DATABASE_URL="mysql://root:$ROOTPW@127.0.0.1:$PORT/$DBN"
+  W6_FAIL=0
+  c6() { if [ "$2" = "$3" ]; then printf "   ok    %-58s %s\n" "$1" "$2"
+         else printf "   FAIL  %-58s %s (expected %s)\n" "$1" "$2" "$3"; W6_FAIL=$((W6_FAIL+1)); fi; }
+  q() { mysh -N "$DBN" -e "$1"; }
+  # stderr KEPT: the forced failure is judged by MySQL's own error text.
+  mysh_err() { docker exec -i "$CONTAINER" mysql -uroot -p"$ROOTPW" --default-character-set=utf8mb4 "$DBN" 2>&1 | grep -v 'Using a password'; }
+  idx_cols() { q "SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX) FROM information_schema.STATISTICS
+                  WHERE TABLE_SCHEMA='$DBN' AND TABLE_NAME='games' AND INDEX_NAME='$1'"; }
+  fk_count() { q "SELECT COUNT(*) FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA='$DBN' AND TABLE_NAME='games'"; }
+  # Everything that describes `games`, minus AUTO_INCREMENT (an insert moves it; a schema
+  # change is what is being looked for).
+  schema_snap() {
+    mysh -N "$DBN" -e "SHOW CREATE TABLE games\G" | sed -E 's/ AUTO_INCREMENT=[0-9]+//'
+    q "SELECT COLUMN_NAME, COLUMN_TYPE, EXTRA, GENERATION_EXPRESSION FROM information_schema.COLUMNS
+        WHERE TABLE_SCHEMA='$DBN' AND TABLE_NAME='games' ORDER BY ORDINAL_POSITION;
+       SELECT INDEX_NAME, SEQ_IN_INDEX, COLUMN_NAME, NON_UNIQUE FROM information_schema.STATISTICS
+        WHERE TABLE_SCHEMA='$DBN' AND TABLE_NAME='games' ORDER BY 1, 2;
+       SELECT CONSTRAINT_NAME, REFERENCED_TABLE_NAME FROM information_schema.REFERENTIAL_CONSTRAINTS
+        WHERE CONSTRAINT_SCHEMA='$DBN' AND TABLE_NAME='games' ORDER BY 1"
+  }
+  # A real completed game, with home and away swapped: what section I exists to refuse.
+  COLS=$(q "SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY ORDINAL_POSITION) FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA='$DBN' AND TABLE_NAME='games' AND COLUMN_NAME<>'id' AND EXTRA NOT LIKE '%GENERATED%'")
+  MIRROR_SEL=${COLS/home_team_id,away_team_id/away_team_id,home_team_id}
+  [ "$MIRROR_SEL" != "$COLS" ] || die "games columns are not in the expected order; cannot build the mirrored copy"
+  MIRROR_OF=$(q "SELECT MIN(id) FROM games WHERE season=2026 AND status='completed'")
+  MIRROR_SQL="INSERT INTO games ($COLS) SELECT $MIRROR_SEL FROM games WHERE id=$MIRROR_OF"
+  ln_wa() { node scripts/import-laxnumbers-games.js --state=WA --replay="$W6_REPLAY" > "$1" 2>&1; }
+
+  say "5. window #6 — section I, section N, WHSBLA forfeit flags, Claremont alias"
+  echo "   a. preflight — the window's step 2, on the restored dump"
+  G0=$(q "SELECT COUNT(*) FROM games"); A0=$(q "SELECT COUNT(*) FROM team_aliases")
+  c6 "unordered-pair duplicates" "$(q "SELECT COUNT(*) FROM (SELECT season, LEAST(home_team_id,away_team_id) lo,
+       GREATEST(home_team_id,away_team_id) hi, game_date FROM games GROUP BY 1,2,3,4 HAVING COUNT(*)>1) d")" "0"
+  c6 "note=Forfeit rows" "$(q "SELECT COUNT(*) FROM games WHERE status_note='note=Forfeit'")" "10"
+  c6 "is_forfeit = 1" "$(q "SELECT COUNT(*) FROM games WHERE is_forfeit=1")" "5"
+  c6 "note=Overtime without is_overtime (J deletes these notes)" "$(q "SELECT COUNT(*) FROM games WHERE status_note='note=Overtime' AND is_overtime=0")" "0"
+  c6 "laxnumbers_teams absent" "$(q "SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA='$DBN' AND TABLE_NAME='laxnumbers_teams'")" "0"
+  c6 "Claremont School 1 alias absent" "$(q "SELECT COUNT(*) FROM team_aliases WHERE alias_normalized='claremont school 1'")" "0"
+  c6 "uq_game on the old columns" "$(idx_cols uq_game)" "season,home_team_id,away_team_id,game_date"
+  c6 "foreign keys on games" "$(fk_count)" "4"
+  echo "   games $G0, team_aliases $A0"
+  [ "$W6_FAIL" -eq 0 ] || die "preflight failed — prod is not the database window #6 was planned against"
+
+  echo "   b. BEFORE — HEAD's API payloads, and the Washington LaxNumbers dry run"
+  boot_api
+  node scripts/window6-payload.js capture "$WORK/w6-before" "$API_BASE" || die "before-capture failed"
+  stop_api
+  ln_wa "$WORK/w6-ln-before.txt" || { tail -20 "$WORK/w6-ln-before.txt"; die "WA dry run (before) failed"; }
+  grep -m1 '\[db\]' "$WORK/w6-ln-before.txt" | sed 's/^/   /'
+  grep -m1 '\[db\] target=REHEARSAL' "$WORK/w6-ln-before.txt" >/dev/null || die "the WA dry run did not run against the rehearsal container"
+  echo "   WA: $(grep -A3 '^  WA:' "$WORK/w6-ln-before.txt" | grep -m1 'resolved' | sed 's/^ *//')"
+
+  echo "   c. FORCED FAILURE — section I with a mirrored duplicate present must change nothing"
+  schema_snap > "$WORK/w6-schema-0"
+  MIRROR_ID=$(q "$MIRROR_SQL; SELECT LAST_INSERT_ID()")
+  c6 "mirrored copy of game $MIRROR_OF inserted as $MIRROR_ID (old key allows it)" "$(q "SELECT COUNT(*) FROM games")" "$((G0+1))"
+  FAIL_OUT=$( { echo "SET SESSION lock_wait_timeout = 30;"; cat migrations/section-i-orientation-independent-uq-game.sql; } | mysh_err)
+  echo "     mysql: $FAIL_OUT"
+  c6 "section I refused with ER_DUP_ENTRY" "$(grep -c 'ERROR 1062' <<<"$FAIL_OUT")" "1"
+  schema_snap > "$WORK/w6-schema-1"
+  c6 "games schema after the failed ALTER: unchanged" "$(cmp -s "$WORK/w6-schema-0" "$WORK/w6-schema-1" && echo identical || echo DIFFERS)" "identical"
+  c6 "no team_lo/team_hi columns" "$(q "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA='$DBN' AND TABLE_NAME='games' AND COLUMN_NAME IN ('team_lo','team_hi')")" "0"
+  c6 "uq_game still on the old columns" "$(idx_cols uq_game)" "season,home_team_id,away_team_id,game_date"
+  c6 "no leftover #sql table from the aborted rebuild" "$(q "SELECT COUNT(*) FROM information_schema.INNODB_TABLES WHERE NAME LIKE '%#sql%'")" "0"
+  q "DELETE FROM games WHERE id = $MIRROR_ID"
+  c6 "mirrored copy removed" "$(q "SELECT COUNT(*) FROM games")" "$G0"
+  [ "$W6_FAIL" -eq 0 ] || die "section I's failure was not clean — do NOT run window #6"
+
+  echo "   d. the window, in order (steps 3–6)"
+  T0=$(date +%s)
+  I_OUT=$( { echo "SET SESSION lock_wait_timeout = 30;"; cat migrations/section-i-orientation-independent-uq-game.sql; } | mysh_err)
+  [ -z "$I_OUT" ] || { echo "     $I_OUT"; die "section I failed"; }
+  echo "     section I applied ($(( $(date +%s) - T0 )) s)"
+  N_OUT=$(mysh_err < migrations/section-n-laxnumbers-teams.sql)
+  [ -z "$N_OUT" ] || { echo "     $N_OUT"; die "section N failed"; }
+  echo "     section N applied"
+  D_OUT=$(node scripts/window6-data.js --commit 2>&1); D_RC=$?
+  printf '%s\n' "$D_OUT" | sed 's/^/     /'
+  [ "$D_RC" -eq 0 ] || die "window6-data.js failed"
+
+  echo "   e. after — the schema and the data"
+  c6 "uq_game on the unordered pair" "$(idx_cols uq_game)" "season,team_lo,team_hi,game_date"
+  c6 "idx_games_home_date" "$(idx_cols idx_games_home_date)" "season,home_team_id,game_date"
+  c6 "foreign keys on games, after the COPY rebuild" "$(fk_count)" "4"
+  c6 "games count unchanged" "$(q "SELECT COUNT(*) FROM games")" "$G0"
+  c6 "laxnumbers_teams exists, 0 rows" "$(q "SELECT COUNT(*) FROM laxnumbers_teams")" "0"
+  c6 "team_aliases +1" "$(q "SELECT COUNT(*) FROM team_aliases")" "$((A0+1))"
+  c6 "is_forfeit = 1: 5 → 15" "$(q "SELECT COUNT(*) FROM games WHERE is_forfeit=1")" "15"
+  c6 "status_note LIKE 'note=%': 43 → 0" "$(q "SELECT COUNT(*) FROM games WHERE status_note LIKE 'note=%'")" "0"
+  c6 "officiating notes kept, prefix stripped" "$(q "SELECT GROUP_CONCAT(CONCAT(status_note,':',k) ORDER BY status_note) FROM (SELECT status_note, COUNT(*) k FROM games WHERE status_note IS NOT NULL GROUP BY 1) n")" "No Referees:1,One Referee:3"
+
+  echo "   f. section I refuses a mirrored copy (inside a transaction, rolled back)"
+  REF_OUT=$(mysh_err <<<"START TRANSACTION; $MIRROR_SQL; ROLLBACK;")
+  echo "     mysql: $REF_OUT"
+  c6 "mirrored copy refused with ER_DUP_ENTRY" "$(grep -c 'ERROR 1062' <<<"$REF_OUT")" "1"
+  c6 "games count unchanged" "$(q "SELECT COUNT(*) FROM games")" "$G0"
+
+  echo "   g. re-run of the data script changes nothing"
+  R_OUT=$(node scripts/window6-data.js --commit 2>&1)
+  c6 "both items report 'already applied'" "$(grep -c 'already applied' <<<"$R_OUT")" "2"
+  c6 "is_forfeit still 15, aliases still +1" "$(q "SELECT CONCAT((SELECT COUNT(*) FROM games WHERE is_forfeit=1),'/',(SELECT COUNT(*) FROM team_aliases))")" "15/$((A0+1))"
+  # Not SMOKE: step 8 assigns SMOKE=$? and would erase it. Folded in after step 9.
+fi
+
 # ── cross-state collisions, BOTH directions ──────────────────────────────────
 #
 # Runs for every window, not only the import ones: the collision family is a property of
@@ -358,36 +512,7 @@ export REHEARSAL_DATABASE_URL="mysql://root:$ROOTPW@127.0.0.1:$PORT/$DBN"
 #      answer. (1) and (2) verify we configured it right; only (3) verifies the bytes on the
 #      wire came from the database we think they did.
 # ─────────────────────────────────────────────────────────────────────────────
-API_PORT=${API_PORT:-3010}
-if lsof -nP -iTCP:$API_PORT -sTCP:LISTEN >/dev/null 2>&1; then
-  echo "   port $API_PORT is already in use — refusing to boot, because the smoke would"
-  echo "   silently interrogate whatever is already there. Free it or set API_PORT."
-  die "rehearsal API port occupied"
-fi
-API_BASE="http://localhost:$API_PORT"
-PORT=$API_PORT node src/api.js > "$WORK/api.log" 2>&1 &
-API_PID=$!
-for i in $(seq 1 40); do curl -sf -o /dev/null --max-time 2 "$API_BASE/api/v2/states" && break; sleep 0.5; done
-curl -sf -o /dev/null --max-time 3 "$API_BASE/api/v2/states" || { tail -20 "$WORK/api.log"; die "API did not boot"; }
-
-API_DBLINE=$(grep -m1 "\[db\]" "$WORK/api.log")
-[ -n "$API_DBLINE" ] || { tail -20 "$WORK/api.log"; die "API printed no [db] boot line — cannot confirm which database it opened"; }
-echo "   $API_DBLINE"
-case "$API_DBLINE" in
-  *target=REHEARSAL*) ;;
-  *) die "the booted API is NOT on the rehearsal database: $API_DBLINE" ;;
-esac
-
-# Truth anchor — same question, both sources, must agree.
-API_OR=$(curl -sf --max-time 10 "$API_BASE/api/v2/schedule/all?season=2026&state=OR" \
-         | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).games.length))")
-SQL_OR=$(mysh -N -e "SELECT COUNT(*) FROM $DBN.games g
-                       JOIN $DBN.teams ht  ON ht.id  = g.home_team_id
-                       JOIN $DBN.teams at2 ON at2.id = g.away_team_id
-                      WHERE g.season=2026 AND g.status<>'stale'
-                        AND (ht.state='OR' OR at2.state='OR')")
-echo "   truth anchor — Oregon feed: API=$API_OR  container=$SQL_OR"
-[ "$API_OR" = "$SQL_OR" ] || die "API ($API_OR) and rehearsal container ($SQL_OR) disagree — the API is serving a different database"
+boot_api
 
 # ── 8. the actual gate ───────────────────────────────────────────────────────
 say "$([ "$WINDOW2" = 1 ] && echo 8 || echo 6). prod-smoke.sh against HEAD on prod's schema"
@@ -437,6 +562,37 @@ if [ "$WINDOW3" = "1" ]; then
   c3 "formats OR"        "$(j3 '/api/v2/playoff-formats?season=2026' 'print(str(d["declared"])+"/"+str(d["resolved"]))')" "2/2"
   c3 "rankings OR"       "$(j3 '/api/v2/rankings/laxnumbers?season=2026' 'print(len(d["rankings"]))')" "41"
   [ "$W3_FAIL" -eq 0 ] || SMOKE=1
+fi
+
+if [ "$WINDOW6" = "1" ]; then
+  say "9. window #6 expected diff"
+  echo "   a. API payloads: before vs after, every v2 read endpoint and every team schedule"
+  node scripts/window6-payload.js capture "$WORK/w6-after" "$API_BASE" || die "after-capture failed"
+  node scripts/window6-payload.js compare "$WORK/w6-before" "$WORK/w6-after"; CMP_RC=$?
+  c6 "payload diff is FF on the 10 forfeits, nothing else" "$([ $CMP_RC -eq 0 ] && echo pass || echo fail)" "pass"
+
+  echo "   b. Washington LaxNumbers dry run, from the recordings: the Claremont rows resolve"
+  ln_wa "$WORK/w6-ln-after.txt" || { tail -20 "$WORK/w6-ln-after.txt"; die "WA dry run (after) failed"; }
+  grep -m1 '\[db\] target=REHEARSAL' "$WORK/w6-ln-after.txt" >/dev/null || die "the WA dry run did not run against the rehearsal container"
+  wa_line() { grep -A3 '^  WA:' "$1" | grep -m1 'resolved' | sed 's/^ *//'; }
+  unres() { grep -A3 '^  WA:' "$1" | grep -m1 -oE 'unresolved [0-9]+' | grep -oE '[0-9]+'; }
+  echo "     before: $(wa_line "$WORK/w6-ln-before.txt")"
+  echo "     after:  $(wa_line "$WORK/w6-ln-after.txt")"
+  c6 "WA unresolved 3 → 0" "$(unres "$WORK/w6-ln-before.txt") → $(unres "$WORK/w6-ln-after.txt")" "3 → 0"
+  # Every other ladder line, compared. cf-ray and timing lines vary run to run.
+  ladder() { grep -vE 'cf-ray|requests this run|ms between|^\[db\]' "$1"; }
+  echo "     output lines that moved (everything else identical):"
+  diff <(ladder "$WORK/w6-ln-before.txt") <(ladder "$WORK/w6-ln-after.txt") | grep -E '^[<>]' | sed 's/^/       /'
+
+  echo "   c. test-writegames.js against the container (OHSLA writer under the new key)"
+  WG_OUT=$(node scripts/test-writegames.js 2>&1); WG_RC=$?
+  printf '%s\n' "$WG_OUT" | grep -m1 '\[db\]' | sed 's/^/     /'
+  printf '%s\n' "$WG_OUT" | tail -3 | sed 's/^/     /'
+  grep -m1 '\[db\] target=REHEARSAL' <<<"$WG_OUT" >/dev/null || die "test-writegames did not run against the rehearsal container"
+  c6 "test-writegames.js" "$WG_RC" "0"
+
+  echo "   window #6 checks failed: $W6_FAIL"
+  [ "$W6_FAIL" -eq 0 ] || SMOKE=1
 fi
 
 say "teardown"
