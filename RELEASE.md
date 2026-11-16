@@ -284,36 +284,25 @@ wrote a garbage row (removed, verified). A should-fail probe is exactly the case
 where the environment surprises you. `START TRANSACTION` … `ROLLBACK`, always,
 no exceptions.
 
-### ⚠️ After every deploy: check the cron's first LaxNumbers run
+### After every deploy: confirm the cron's first run
 
-Railway places each deployment on its own host, and the host decides the outbound
-address. On 2026-11-14 cron deployment `40cc003a` left from **18.144.119.47 (Amazon)**
-and every run got a Cloudflare 403 challenge on all six states, while the API — same
-image, same region `us-west2`, on Railway's own network (152.55.177.94) — got 200.
-Deployment `93f8abd5` on 2026-11-12 failed the same way, and a new deployment cleared
-it. Over the 7 days before, every deployment either passed every run or failed every run.
-The code was not the cause either time.
+**Since 2026-11-16 `varsitylax-cron` has static outbound IPs** (Railway Pro, enabled on
+the cron service only, not the API). Assigned, shared and Railway-owned:
+**162.220.232.251, 152.55.176.240, 152.55.177.181**.
 
-After **every** deploy of `varsitylax-cron` (a push, a redeploy, anything that makes a
-new deployment ID):
+After every new cron deployment, confirm the first run (next even UTC hour) logs
+`[LaxNumbers] outbound IPv4=` **one of those three** and `✓` on all six states:
+```
+railway logs --service varsitylax-cron -n 500 <deployment-id> \
+  | grep -E '\[db\] target=|\[LaxNumbers'
+```
+Anything else (a 403, or an IP outside the three) is a new problem: stop and report;
+don't redeploy to shake it loose.
 
-1. **Read the first run.** It fires at the next even UTC hour (see above). Each state
-   logs `[LaxNumbers:<ST>] ✓` or `✗`, and every run logs one
-   `[LaxNumbers] outbound IPv4=<ip>` line, pass or fail.
-   ```
-   railway logs --service varsitylax-cron -n 500 <deployment-id> \
-     | grep -E '\[db\] target=|\[LaxNumbers'
-   ```
-2. **Record the IP and its owner** in the table below, every time, pass or fail:
-   `whois <ip> | grep -E '^(OrgName|NetName)'`.
-3. **If it was challenged** (403, `cf-mitigated=challenge`): redeploy the cron service
-   with no code change — `railway redeploy --service varsitylax-cron` (a *redeploy*,
-   which makes a new deployment; `railway restart` reuses the same one). Then go back to
-   step 1 for the new deployment. `/api/v2/health/laxnumbers` flags a state only after
-   3 failed runs in a row, so don't wait for it.
-
-Static outbound IPs would end this, but Railway offers them on the Pro plan only; this
-project is on Hobby (2026-11-14).
+**History.** Before static IPs, each deployment landed on a host that chose the outbound
+address. Amazon addresses got Cloudflare 403 challenges on all six states for the life
+of the deployment; Railway addresses passed. 4 of 6 logged deployments were challenged,
+and the fix was redeploying until a good host came up.
 
 | Date | Deployment | Outbound IPv4 | Owner | First run |
 |---|---|---|---|---|
@@ -322,6 +311,9 @@ project is on Hobby (2026-11-14).
 | 2026-11-14 | `8a2985a4` (redeploy, no code change) | not logged (passes didn't log it yet) | — | 200 ×6 |
 | 2026-11-15 | `5608ed31` (push `3530e17`) | 52.9.155.108 | Amazon (AT-88-Z) | 403 ×6 |
 | 2026-11-15 | `673a425b` (redeploy, no code change) | 162.220.232.42 | Railway (RLWY-METALGEN1-01) | 200 ×6 |
+| 2026-11-16 | `3e04e4af` (push `f9fa6fe`) | 52.8.164.129 | Amazon (AT-88-Z) | 403 ×6 |
+| 2026-11-16 | `c3d6245f` (redeploy, no code change) | — | — | no run (replaced before its first run) |
+| 2026-11-16 | `f5860031` (**static outbound IPs on**, redeploy) | 152.55.176.240 | Railway (RC-1550) | 200 ×6, every run (a triggered run at 05:02 UTC, then 06:00–14:00 UTC, 6 in all) |
 
 ---
 
