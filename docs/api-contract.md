@@ -438,6 +438,47 @@ A run counts as failed when its `scrape_log` row for the rankings request has st
 and `/health`'s contract (`status: "ok"`) does not change. Not part of the app contract,
 and absent from `payload-baseline/` (live data).
 
+## 9.2 `/health/laxnumbers-games` — the cron's game job, for the uptime monitor
+
+`GET /api/v2/health/laxnumbers-games` reports, per state the LaxNumbers game job covers
+(WA, AZ, ID, MT, NV; never OR), how many of its **committing** runs in a row have failed.
+**503 when any state reaches 3**, 200 otherwise; the body is the same shape either way:
+
+```json
+{ "status": "ok", "threshold": 3, "failing": [],
+  "states": [ { "state": "MT", "consecutiveFailedRuns": 0,
+                "lastSuccessAt": "2026-11-17T10:02:11-08:00",
+                "lastErrorAt": null, "lastErrorHttpStatus": null,
+                "overCapLastRun": false, "unresolvedLastRun": 0,
+                "missedDailyPass": false } ] }
+```
+
+- **Which states are listed.** A state appears while it has a `laxnumbers-games` row in
+  `scrape_log` from the last 7 days, and only those rows are read. A dry run writes no
+  row, and the job when off writes none, so with the job off the list is empty and the
+  endpoint returns 200. The API cannot see the cron's variables: "switched off" and
+  "stopped" look the same from here.
+- **Failures.** The same rule as §9.1: a run counts as failed when its row has status
+  `error`; `partial` is a good run. `lastErrorHttpStatus` is 403 for a blocked request.
+- **Flags, which never change the status code.**
+  - `overCapLastRun`: the newest run left pages over its read cap (`true`/`false`).
+  - `unresolvedLastRun`: the newest run's count of unresolved team names.
+  - `missedDailyPass`: the newest row is more than 26 hours old.
+
+  `overCapLastRun` and `unresolvedLastRun` are read from the newest row's summary line
+  with one strict pattern. They are `null` when that row is an error or its text does not
+  match: never a guess, and never the text itself.
+- **A state switched off after failing stays at 503.** If a state reaches 3 failed runs
+  and the job is then switched off for it, no new row is written, so the endpoint keeps
+  returning 503 **until those rows are older than 7 days**. Two things clear it: a good
+  run logged for that state (switching it back on and having one run succeed), or the
+  failed rows aging past 7 days. Switching the job off does not clear it.
+- **No error text,** as in §9.1; a failure to read the database returns 500
+  `{ "error": "health check failed" }`.
+
+Separate from `/health/laxnumbers` on purpose, so that endpoint and its monitor keep their
+meaning. Not part of the app contract, and absent from `payload-baseline/` (live data).
+
 ---
 
 ## 10. v1 (`/api`) — legacy

@@ -70,3 +70,85 @@ async function laxnumbersHealth(db, states, { window = 25 } = {}) {
 }
 
 module.exports = { THRESHOLD, SOURCES, consecutiveFailures, httpStatusOf, laxnumbersHealth };
+
+// ── The cron's LaxNumbers GAME job (diff 9b) ─────────────────────────────────────────────
+// Read by GET /api/v2/health/laxnumbers-games. The functions above are untouched.
+//
+// A RUN, per state, is one scrape_log row with source 'laxnumbers-games'. Only a COMMITTING
+// run writes one (src/laxnumbers-games/cron.js): a dry run writes none, and the job when
+// OFF writes none.
+//   status 'error'                 a failed run; the message is the thrown error, and a
+//                                  blocked request reads "LaxNumbers 403 for <url>"
+//   status 'success' | 'partial'   a good run; the message is the job's summary line
+//
+// WHICH STATES. The API cannot see the cron's variables, so "switched off" and "stopped"
+// look the same from here. A game-job state is listed while it has a row in the last
+// GAMES_RECENT_DAYS days, and only those rows are read. So a state that is switched off
+// after 3 failed runs keeps the endpoint at 503 until those rows are older than 7 days,
+// or until a good run is logged for it. Staleness is therefore a flag (missedDailyPass),
+// never a 503.
+//
+// FLAGS warn and never cause a 503:
+//   overCapLastRun     the newest run had pages over the read cap
+//   unresolvedLastRun  the newest run's count of unresolved names
+//   missedDailyPass    the newest row is more than GAMES_STALE_HOURS old
+// The first two are read from the newest row's summary with ONE strict pattern. When that
+// row is an error, or its text does not match, they are null: never a guess, never text.
+// Row ages are computed by the database against its own NOW(), the same clock that fills
+// scraped_at's default.
+const GAMES_SOURCE = 'laxnumbers-games';
+const GAMES_RECENT_DAYS = 7;
+const GAMES_STALE_HOURS = 26;
+// The summary line src/laxnumbers-games/cron.js writes. Tested against lines built by
+// that code (scripts/test-laxnumbers-games-health.js), so the two cannot drift silently.
+const GAMES_SUMMARY = /^read (\d+), unchanged (\d+), over the cap (\d+); insert (\d+), update (\d+), fill (\d+); unresolved (\d+)(?:, identity conflicts (\d+))?$/;
+
+/** The game job's summary line → its counts, or null when the text does not match. Pure. */
+function parseGamesSummary(message) {
+  const m = GAMES_SUMMARY.exec(message ?? '');
+  if (!m) return null;
+  const n = i => (m[i] == null ? 0 : Number(m[i]));
+  return { teams: n(1), skipped: n(2), capped: n(3), inserted: n(4), updated: n(5), filled: n(6),
+           unresolved: n(7), identityConflicts: n(8) };
+}
+
+/**
+ * One entry per state that has a game-job row in the last GAMES_RECENT_DAYS days; a state
+ * with none is left out. `states` is the game-job states in registry order.
+ */
+async function gamesHealth(db, states, { window = 25 } = {}) {
+  const out = [];
+  for (const state of states) {
+    const [rows] = await db.execute(
+      `SELECT status, error_message, scraped_at,
+              (scraped_at < NOW() - INTERVAL ${GAMES_STALE_HOURS} HOUR) AS stale
+         FROM scrape_log
+        WHERE state = ? AND source = ? AND scraped_at >= NOW() - INTERVAL ${GAMES_RECENT_DAYS} DAY
+        ORDER BY id DESC LIMIT ${Number(window)}`,
+      [state, GAMES_SOURCE]);
+    if (!rows.length) continue;
+    const [[ok]] = await db.execute(
+      `SELECT MAX(scraped_at) AS at FROM scrape_log
+        WHERE state = ? AND source = ? AND status <> 'error'`, [state, GAMES_SOURCE]);
+    const newest = rows[0];
+    const lastErr = rows.find(r => r.status === 'error') || null;
+    const summary = newest.status === 'error' ? null : parseGamesSummary(newest.error_message);
+    out.push({
+      state,
+      consecutiveFailedRuns: consecutiveFailures(rows),
+      lastSuccessAt: ok.at || null,
+      lastErrorAt: lastErr ? lastErr.scraped_at : null,
+      lastErrorHttpStatus: lastErr ? httpStatusOf(lastErr.error_message) : null,
+      overCapLastRun: summary ? summary.capped > 0 : null,
+      unresolvedLastRun: summary ? summary.unresolved : null,
+      missedDailyPass: Boolean(Number(newest.stale)),
+    });
+  }
+  return out;
+}
+
+module.exports.GAMES_SOURCE = GAMES_SOURCE;
+module.exports.GAMES_RECENT_DAYS = GAMES_RECENT_DAYS;
+module.exports.GAMES_STALE_HOURS = GAMES_STALE_HOURS;
+module.exports.parseGamesSummary = parseGamesSummary;
+module.exports.gamesHealth = gamesHealth;
