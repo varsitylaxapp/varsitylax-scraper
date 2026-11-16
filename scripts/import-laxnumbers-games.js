@@ -10,10 +10,15 @@
  *   ./scripts/staging scripts/import-laxnumbers-games.js --state=ID --commit
  *   ./scripts/staging scripts/import-laxnumbers-games.js --state=WA,AZ --record=DIR
  *   ./scripts/staging scripts/import-laxnumbers-games.js --state=WA,AZ --replay=DIR --commit
+ *   ./scripts/staging scripts/import-laxnumbers-games.js --state=ID --changed-only --max-requests=40
  *   node scripts/import-laxnumbers-games.js --state=ID --stage-c --commit     (prod)
  *
+ * --changed-only reads only the team pages whose games-played moved, that have no stored
+ * row, or that were not read since today's Pacific midnight (laxnumbers_teams, section N).
+ * --max-requests=N caps the reads in one run, ratings included (default 160).
+ *
  * --record=DIR saves every LaxNumbers response; --replay=DIR reads them back and makes no
- * request at all (a missing file is an error). Live requests are spaced 1.1 s apart.
+ * request at all (a missing file is an error). Live requests are spaced 2 s apart.
  *
  * SEASON: --season=YYYY, else $SEASON, else 2026. The resolved value and where it came
  * from are printed in the banner. Anything outside 2000–2100 is refused.
@@ -150,8 +155,15 @@ const argVal  = k => { const a = process.argv.filter(x => x.startsWith(`--${k}=`
 const RECORD  = argVal('record'), REPLAY = argVal('replay');
 if (RECORD && REPLAY) { console.error('FATAL: --record and --replay together'); process.exit(1); }
 const HTTP = REPLAY ? { mode: 'replay', dir: REPLAY, spacingMs: 0 }
-           : RECORD ? { mode: 'record', dir: RECORD, spacingMs: 1100 }
-           :          { mode: 'live',   dir: null,   spacingMs: 1100 };
+           : RECORD ? { mode: 'record', dir: RECORD, spacingMs: 2000 }
+           :          { mode: 'live',   dir: null,   spacingMs: 2000 };
+const CHANGED_ONLY = process.argv.includes('--changed-only');
+const MAX_REQUESTS = (() => {
+  const v = argVal('max-requests');
+  if (v == null) return undefined;                       // the core's default
+  if (!/^\d+$/.test(v) || Number(v) < 1) { console.error(`FATAL: --max-requests=${v} is not a positive integer`); process.exit(1); }
+  return Number(v);
+})();
 const STAGE_C = process.argv.includes('--stage-c');
 const STATES  = process.argv.filter(a => a.startsWith('--state='))
   .flatMap(a => a.slice(8).split(',')).map(x => x.trim().toUpperCase()).filter(Boolean);
@@ -206,7 +218,8 @@ if (COMMIT && NOT_OURS.length) {
   console.log(`  mode:   ${COMMIT ? 'COMMIT' : 'DRY RUN (writes nothing)'}`);
   console.log(`  season: ${SEASON} (${SEASON_FROM})`);
   console.log(`  states: ${STATES.join(', ')}`);
-  console.log(`  http:   ${HTTP.mode}${HTTP.dir ? ' ' + HTTP.dir : ''}${HTTP.spacingMs ? `, ${HTTP.spacingMs} ms between requests` : ''}\n`);
+  console.log(`  http:   ${HTTP.mode}${HTTP.dir ? ' ' + HTTP.dir : ''}${HTTP.spacingMs ? `, ${HTTP.spacingMs} ms between requests` : ''}`);
+  console.log(`  pages:  ${CHANGED_ONLY ? 'changed-only' : 'full pass'}, at most ${MAX_REQUESTS ?? 160} reads\n`);
 
   try {
     // A dry run is wrapped in a transaction that is always rolled back, as a second
@@ -214,7 +227,8 @@ if (COMMIT && NOT_OURS.length) {
     if (!COMMIT) await c.beginTransaction();
 
     const { report } = await importLaxNumbersGames({
-      c, commit: COMMIT, season: SEASON, states: STATES, rosterLocked: ROSTER_LOCKED, http: HTTP });
+      c, commit: COMMIT, season: SEASON, states: STATES, rosterLocked: ROSTER_LOCKED, http: HTTP,
+      changedOnly: CHANGED_ONLY, maxRequests: MAX_REQUESTS });
 
     // ── THE COUNT LADDER, fourth edition ──────────────────────────────────────
     // Every parsed row is accounted for. A row that is neither imported nor explained
@@ -226,7 +240,8 @@ if (COMMIT && NOT_OURS.length) {
       const gap = st.parsed - explained;
       const row = (label, n, note = '') => console.log(`      ${label.padEnd(36)}${String(n).padStart(5)}${note ? '   ' + note : ''}`);
       console.log(`\n    ${code}`);
-      row('source gp total (ratings service)', st.gpTotal);
+      row('team pages read', st.teams, `(unchanged, skipped ${st.skipped}; over the cap ${st.capped})`);
+      row('source gp total, pages read', st.gpTotal);
       row('rows parsed from team pages', st.parsed);
       row('  - no result, past ("-")', st.noResult);
       row('  - the SAME game, other team\'s page', st.mirrored, '(every game appears on both pages)');

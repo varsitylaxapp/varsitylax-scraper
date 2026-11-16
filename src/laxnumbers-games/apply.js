@@ -216,6 +216,7 @@ async function recordUnresolved(ctx) {
     if (u.ambiguous) console.log(`           AMBIGUOUS: ${u.ambiguous} — refused, not picked`);
     if (u.foreign) console.log(`           FOREIGN ROW, NO RULING: ${u.foreign} — refused (data/foreign-row-rulings.json)`);
     if (u.number) console.log(`           BY TEAM NUMBER: ${u.number}`);
+    if (u.identity) console.log(`           IDENTITY CONFLICT: ${u.identity} — refused (laxnumbers_teams)`);
     u.samples.forEach(s => console.log(`           e.g. ${s}`));
     if (ctx.commit) {
       await c.execute(

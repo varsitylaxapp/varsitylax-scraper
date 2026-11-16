@@ -4,7 +4,9 @@
  * and the state-scoped lookups.
  *
  * ctx: { c, commit, season, states, rosterLocked: Set, ix: buildIndexes(…),
- *        fakeId, seenThisRun: Set, report: { perState, unresolved: Map } }
+ *        fakeId, seenThisRun: Set, report: { perState, unresolved: Map },
+ *        stored: Map | null (laxnumbers_teams; null before section N),
+ *        changedOnly, cutoffUtc, maxRequests, counter: { requests, reads } }
  */
 const { getState, listStates } = require('../config/states');
 const { norm, loose, indexRatedByNumber } = require('./resolve');
@@ -12,6 +14,7 @@ const { ratingsRows, teamGames, politeness } = require('./fetch');
 const { createTeam, findExisting, decide, insertGame, applySet, logConflicts,
         upsertSourceRecord, pruneVanished } = require('./apply');
 const { toPacific, teamZone, todayIn } = require('./time');
+const { whyFetch, identity, storeRead, key } = require('./teams');
 
 async function runPhases(ctx) {
   const { c, season: SEASON, states: STATES, rosterLocked: ROSTER_LOCKED, report } = ctx;
@@ -60,6 +63,7 @@ async function runPhases(ctx) {
     const state = getState(code);
     if (!state) throw new Error(`unknown state ${code}`);
     if (i) await politeness(http);
+    counter.reads++;
     const rows = await ratingsRows(state, SEASON, http, counter);
     ratings.set(code, rows);
 
@@ -111,6 +115,7 @@ async function runPhases(ctx) {
   for (const st of listStates()) {
     if (!st.laxnumbersId || ratings.has(st.code)) continue;
     await politeness(http);
+    counter.reads++;
     const rows = await ratingsRows(st, SEASON, http, counter);
     ratings.set(st.code, rows);
     console.log(`  ${st.code}: ratings fetched for the opponent lookup only — ${rows.length} rated team(s)`);
@@ -118,20 +123,35 @@ async function runPhases(ctx) {
   if (ctx.commit) await c.commit();
   const byNbr = indexRatedByNumber(ratings);
 
-  // ══ PHASE 2a: every team page, before any game is written. ══
-  // A failed request stops the run here, with nothing written for any state.
+  // ══ PHASE 2a: the team pages this run reads, before any game is written. ══
+  // A failed request (a 403 above all) throws here and stops the whole job: nothing is
+  // written for any state, nothing is remembered, and every page stays due next run.
+  //
+  // CHANGED-ONLY (teams.js whyFetch): a page is read when its gp moved, when nothing is
+  // stored for it, or when its last read is from before today's Pacific midnight. The
+  // request cap counts every read, ratings included; a page past it is left for the next
+  // run, which still sees it as due because nothing was stored for it.
+  const { stored } = ctx;
   const pagesByState = new Map();
   for (const code of STATES) {
     const state = getState(code);
-    const pages = { ok: 0, firstRay: null, lastRay: null };
+    const pages = { ok: 0, firstRay: null, lastRay: null, skipped: 0, capped: 0,
+                    why: { all: 0, new: 0, gp: 0, daily: 0 } };
     const list = [];
     for (const t of ratings.get(code)) {
+      const why = whyFetch(t, stored?.get(key(code, t.team_nbr)), ctx);
+      if (!why) { pages.skipped++; continue; }
+      if (counter.reads >= ctx.maxRequests) { pages.capped++; continue; }
       await politeness(http);
+      counter.reads++;
+      pages.why[why]++;
       list.push({ t, games: await teamGames(state, t.team_nbr, SEASON, pages, http, counter) });
     }
     pagesByState.set(code, { list, pages });
+    const whyText = Object.entries(pages.why).filter(([, n]) => n).map(([k, n]) => `${k} ${n}`).join(', ');
     console.log(`[LaxNumbers:${code}] ${pages.replayed ? `${pages.replayed} team page(s) REPLAYED from ${http.dir}`
-      : `${pages.ok} team page(s) 200` + (pages.ok ? `, cf-ray ${pages.firstRay} … ${pages.lastRay}` : '')}`);
+      : `${pages.ok} team page(s) 200` + (pages.ok ? `, cf-ray ${pages.firstRay} … ${pages.lastRay}` : '')}` +
+      `  (read ${list.length}${whyText ? `: ${whyText}` : ''}; unchanged, skipped ${pages.skipped}; over the cap ${pages.capped})`);
   }
 
   // ══ PHASE 2b: games, one transaction per state. ══
@@ -141,10 +161,11 @@ async function runPhases(ctx) {
 
   for (const code of STATES) {
     const state = getState(code);
-    const { list } = pagesByState.get(code);
+    const { list, pages } = pagesByState.get(code);
     const today = todayIn(state.timeZone);
     const locked = ROSTER_LOCKED.has(code);
-    const st = { teams: list.length, gpTotal: 0, parsed: 0, resolved: 0, unresolved: 0,
+    const st = { teams: list.length, skipped: pages.skipped, capped: pages.capped, remembered: 0,
+                 identityConflicts: 0, byStored: 0, gpTotal: 0, parsed: 0, resolved: 0, unresolved: 0,
                  noResult: 0, scheduled: 0, ot: 0, ff: 0, mirrored: 0, ruledOut: 0, oregon: 0,
                  inserted: 0, updated: 0, filled: 0, unchanged: 0,
                  conflictGames: 0, conflictFields: 0, flipped: 0,
@@ -160,8 +181,19 @@ async function runPhases(ctx) {
         // The rated team itself must exist in OUR roster; if it does not, that is an
         // unresolved ROSTER entry, reported the same way and never invented. Locked or
         // not, the same both-states rule as phase 1.
-        const selfR = resolveRated(t, code);
+        // Checked against the remembered team for this number (teams.js identity): a
+        // rename still finds the team; a disagreement is refused, never followed.
+        const selfR = identity(resolveRated(t, code), stored?.get(key(code, t.team_nbr)), id => byId.has(id));
         const selfId = selfR.id;
+        if (selfR.reason === 'identity-conflict') {
+          st.identityConflicts++;
+          console.log(`      IDENTITY CONFLICT: t=${t.team_nbr} "${t.name}" is stored as ${label(selfR.storedId)}, ` +
+                      `the lookup now says ${label(selfR.freshId)} — refused; its games are not imported`);
+        }
+        if (selfR.via === 'stored') {
+          st.byStored++;
+          console.log(`      by stored team number: t=${t.team_nbr} "${t.name}" no longer matches by name → ${label(selfId)}`);
+        }
         st.parsed += games.length;
         let pageClean = selfId != null && selfId > 0;
 
@@ -175,7 +207,7 @@ async function runPhases(ctx) {
 
           // BY TEAM NUMBER FIRST (resolve.js resolveOpponentGame); the name only for an
           // unlinked opponent or a number in none of our feeds. A refusal is final.
-          const oppR = resolveOpponentGame(g, code, byNbr);
+          const oppR = resolveOpponentGame(g, code, byNbr, (feed, nbr) => stored?.get(key(feed, nbr)));
           const oppId = oppR.id;
           if (oppR.by === 'number') st.oppByNumber++;
           else { st.oppByName++; if (oppR.nameWhy === 'no-link') st.oppNoLink++; else st.oppNotInFeeds++; }
@@ -192,6 +224,7 @@ async function runPhases(ctx) {
             const why = !selfId ? selfR : oppR;
             if (why.reason === 'ambiguous') e.ambiguous = why.candidates.map(label).join(' | ');
             if (why.reason === 'foreign-unruled') e.foreign = `tagged ${why.rowState}; matches ${why.candidates.map(label).join(' | ')} only through the feed state`;
+            if (why.reason === 'identity-conflict') e.identity = `stored as ${label(why.storedId)}, the lookup now says ${label(why.freshId)}`;
             if (selfId && oppR.by === 'number') e.number = `t=${oppR.nbr} is "${oppR.ratedName}" in ${oppR.feed}'s feed — ${oppR.reason}; the name was not tried`;
             if (e.samples.length < 2) e.samples.push(`${g.date} ${t.name} ${g.teamScore ?? '-'}-${g.oppScore ?? '-'} ${g.opponentRaw}`);
             report.unresolved.set(key, e);
@@ -261,6 +294,9 @@ async function runPhases(ctx) {
           await upsertSourceRecord(c, gameId, g.date, inc, names);
         }
         if (pageClean) readTeams.add(selfId);
+        // Remembered in the same transaction as the page's games, and only for a clean
+        // page: one with an unresolved or refused row is read again next run.
+        if (pageClean && ctx.commit && stored) { await storeRead(c, SEASON, code, t, selfId); st.remembered++; }
       }
       if (ctx.commit) await c.commit();
     } catch (err) {
@@ -269,7 +305,10 @@ async function runPhases(ctx) {
     }
 
     report.perState[code] = st;
-    console.log(`  ${code}: ${st.teams} rated teams, gp total ${st.gpTotal}, parsed ${st.parsed}`);
+    console.log(`  ${code}: ${st.teams} team page(s) read, gp total ${st.gpTotal}, parsed ${st.parsed}` +
+                `  (unchanged, skipped ${st.skipped}; over the cap ${st.capped})`);
+    console.log(`      remembered ${ctx.commit && stored ? st.remembered : 0}${!stored ? ' (no laxnumbers_teams table)' : !ctx.commit ? ' (dry run)' : ''}` +
+                `  by stored number ${st.byStored}  identity conflicts ${st.identityConflicts}`);
     console.log(`      resolved ${st.resolved}  unresolved ${st.unresolved}  ruled-out ${st.ruledOut}  oregon-skipped ${st.oregon}`);
     console.log(`      ${ctx.commit ? '' : 'would: '}insert ${st.inserted} (scheduled ${st.scheduled})  update ${st.updated}  ` +
                 `fill ${st.filled}  unchanged ${st.unchanged}`);

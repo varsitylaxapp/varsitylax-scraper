@@ -5,6 +5,7 @@
  */
 const fs = require('fs');
 const path = require('path');
+const { identity } = require('./teams');
 
 const norm  = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 const loose = s => norm(s).replace(/\b(high school|hs|school|academy|prep|the)\b/g, '').replace(/\s+/g, ' ').trim();
@@ -211,15 +212,21 @@ function buildIndexes(teams, aliases, { foreignRulings, ruledOutGames } = {}) {
    *
    * This is the Borah row: "Mountain View" t=12983 is Oregon's mt_view, which the name
    * rule (Idaho's own teams first) got wrong.
+   *
+   * `storedOf(feed, nbr)`, when given, is the remembered team for that number
+   * (laxnumbers_teams): each hit is checked against it by teams.js identity(), so a
+   * renamed opponent still resolves and a disagreement is refused.
    */
-  const resolveOpponentGame = (g, code, byNbr) => {
+  const resolveOpponentGame = (g, code, byNbr, storedOf = null) => {
     const nbr = g.opponentNbr ?? null;
     const hits = nbr != null ? byNbr.get(nbr) : null;
     if (!hits || hits.length === 0) {
       return { ...resolveOpponent(g.opponentRaw, code), by: 'name', nbr,
                nameWhy: nbr == null ? 'no-link' : 'not-in-feeds' };
     }
-    const rs = hits.map(h => ({ feed: h.feed, ratedName: h.row.name, ...resolveRated(h.row, h.feed) }));
+    const fresh = h => resolveRated(h.row, h.feed);
+    const checked = h => storedOf ? identity(fresh(h), storedOf(h.feed, nbr), id => byId.has(id)) : fresh(h);
+    const rs = hits.map(h => ({ feed: h.feed, ratedName: h.row.name, ...checked(h) }));
     const refused = rs.find(r => r.id == null);
     const ids = [...new Set(rs.map(r => r.id))];
     if (!refused && ids.length === 1) return { id: ids[0], by: 'number', nbr, feed: rs[0].feed };
