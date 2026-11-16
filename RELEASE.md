@@ -1503,7 +1503,19 @@ so these rows are practically unread. That bounds the risk; the diff is what set
 
 ---
 
-## Window #6 — section I, section N, the Claremont alias, WHSBLA forfeit flags — PLANNED, NOT RUN
+## Window #6 — section I, section N, the Claremont alias, WHSBLA forfeit flags — ✅ SHIPPED 2026-11-16
+
+**Run 2026-11-16 01:08–01:14 UTC from `rehearsal-window6` at `9db4932`, exactly as rehearsed.**
+Rollback anchor: `~/Desktop/varsitylax/dumps/2026-11-16-window6/prod-varsitylax.sql` (2.0 MB,
+taken 01:09 UTC). Preflight matched the rehearsal on every number. Section I applied in
+7.3 s; section N; `window6-data.js --window6 --commit`: J 2–5 changed 10 / 29 / 10 / 4 rows,
+`is_forfeit` 5 → 15, `team_aliases` 469 → 470. prod-smoke **38/38**. Post-window checks
+identical to the rehearsal. Live API before vs after, 270 responses: `isForfeit` false → true
+on the 10 games (30 appearances), 0 other differences. The 02:00 UTC cron run: OHSLA
+"354 matchups upserted, 0 stale pruned" under the new key, no error; 1328 games, 0
+duplicate pairs; `/api/v2/health` and `/api/v2/health/laxnumbers` unchanged apart from
+their timestamps. Game #76032 added to the WHSBLA conflicts CSV.
+
 
 Plan written 2026-11-15 against the prod dump of that morning
 (`~/Desktop/varsitylax/dumps/2026-11-15-reset/`). Nothing here has touched production.
