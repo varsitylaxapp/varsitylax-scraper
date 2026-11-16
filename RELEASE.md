@@ -1682,3 +1682,52 @@ Each item independently, in reverse order:
   Tested 2026-11-15 on the dump at 8.4.11: SHOW CREATE TABLE afterwards is identical to
   before section I. The old key is looser than the new one, so no row written in between
   can block it.
+
+---
+
+## Release 2026-11-16b — switch-on tooling (9a) and game-job health (9b)
+
+**Status: merged and pushed with Spencer's go for this one release.** It ships no
+switch-on stage, no Railway variable change and no production database write. The game
+job stays off (`LAXNUMBERS_GAMES_STATES` unset).
+
+What ships:
+
+- **9a, `scripts/switchon-payload.js`.** Captures the v2 API before and after a stage, and
+  passes the stage only when the sole difference is `datetime` going from null to a
+  timestamp on that stage's games. Nothing runs it automatically; it's a tool for the
+  stages.
+- **9b, `GET /api/v2/health/laxnumbers-games`.** The game job's health for the uptime
+  monitor (api-contract.md §9.2). With the job off it returns 200, `threshold` 3 and no
+  states. `/api/v2/health/laxnumbers` is unchanged.
+- **Docs:** `docs/plans-2026-11-16.md` with Spencer's review (the three-day schedule),
+  and the static-IP post-deploy check above.
+
+Gates on the release branch (`release-2026-11-16b`):
+- every `scripts/test-*` passes, including `test-laxnumbers-health.js` unchanged since
+  `f9fa6fe`;
+- `test-writegames` passes on staging;
+- the rehearsal gate passes (24 tables, Oregon 345 = 345, 39/39);
+- prod-smoke against a staging API started from the branch: 39/39.
+
+### For the switch-on: `--expect-games` per stage
+
+Measured on the window-6 container with the stages in the approved order, one capture
+before and after each stage (9a proof, `~/Desktop/varsitylax/patches/9a-proof/`):
+
+| Stage | `--expect-games` |
+|---|---|
+| MT | 44 |
+| NV | 118 (includes #96960, Tahoma WA v Coronado NV) |
+| AZ | 105 |
+| ID | 167 (includes #96699, Northwest Black ID v Sumner WA) |
+| WA | 0 |
+| **Total** | **434 distinct games** |
+
+```
+node scripts/switchon-payload.js compare <before> <after> --state MT --expect-games 44
+```
+
+**9b must be live in production before stage 1** (the first committing run), so that
+committing runs are monitored from their first `scrape_log` row. Stage 0 is a dry run
+and writes no row.
