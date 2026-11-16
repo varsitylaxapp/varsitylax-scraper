@@ -320,6 +320,8 @@ project is on Hobby (2026-11-14).
 | 2026-11-12 | `93f8abd5` | not logged | — | 403 ×6 |
 | 2026-11-14 | `40cc003a` | 18.144.119.47 | Amazon (AT-88-Z) | 403 ×6 |
 | 2026-11-14 | `8a2985a4` (redeploy, no code change) | not logged (passes didn't log it yet) | — | 200 ×6 |
+| 2026-11-15 | `5608ed31` (push `3530e17`) | 52.9.155.108 | Amazon (AT-88-Z) | 403 ×6 |
+| 2026-11-15 | `673a425b` (redeploy, no code change) | 162.220.232.42 | Railway (RLWY-METALGEN1-01) | 200 ×6 |
 
 ---
 
