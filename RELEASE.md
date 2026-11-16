@@ -1500,3 +1500,191 @@ Identical row count, identical content hash across every meaningful column. **Re
 Risk bound, for the record: v1 has been frozen since July under `WRITE_MODE=v2`, is served
 only to 1.6.0 fallback clients, and the fallback fires only when v2 fails. v2 is healthy,
 so these rows are practically unread. That bounds the risk; the diff is what settles it.
+
+---
+
+## Window #6 — section I, section N, the Claremont alias, WHSBLA forfeit flags — ✅ SHIPPED 2026-11-16
+
+**Run 2026-11-16 01:08–01:14 UTC from `rehearsal-window6` at `9db4932`, exactly as rehearsed.**
+Rollback anchor: `~/Desktop/varsitylax/dumps/2026-11-16-window6/prod-varsitylax.sql` (2.0 MB,
+taken 01:09 UTC). Preflight matched the rehearsal on every number. Section I applied in
+7.3 s; section N; `window6-data.js --window6 --commit`: J 2–5 changed 10 / 29 / 10 / 4 rows,
+`is_forfeit` 5 → 15, `team_aliases` 469 → 470. prod-smoke **38/38**. Post-window checks
+identical to the rehearsal. Live API before vs after, 270 responses: `isForfeit` false → true
+on the 10 games (30 appearances), 0 other differences. The 02:00 UTC cron run: OHSLA
+"354 matchups upserted, 0 stale pruned" under the new key, no error; 1328 games, 0
+duplicate pairs; `/api/v2/health` and `/api/v2/health/laxnumbers` unchanged apart from
+their timestamps. Game #76032 added to the WHSBLA conflicts CSV.
+
+
+Plan written 2026-11-15 against the prod dump of that morning
+(`~/Desktop/varsitylax/dumps/2026-11-15-reset/`). Nothing here has touched production.
+Schema and data only: **no push, no deploy, no env var, no cron change.** The API, cron
+and app need no new code for any of it.
+
+### What ships, and what a user sees
+
+| # | change | kind | user-visible |
+|---|---|---|---|
+| 1 | `migrations/section-i-orientation-independent-uq-game.sql` — `uq_game` becomes (season, unordered pair, date), as **one atomic ALTER** | DDL on `games` | no |
+| 2 | `migrations/section-n-laxnumbers-teams.sql` — the diff-7 table, created empty | DDL, new table | no |
+| 3 | Section J's statements 2–5, re-run: `is_forfeit = 1` on the 10 WHSBLA forfeits, `note=` notes cleaned | data, `games` | **yes**: 10 Washington games show FF |
+| 4 | The Claremont ruling (`de9fc76`): `team_aliases` row "Claremont School 1" → `claremont_bc` (BC, source laxnumbers) | data, 1 row | no |
+
+**Preconditions measured on the dump** (re-measured live in step 2 below):
+- `games` 1328 rows; **0** unordered-pair duplicates, so section I's new key can be added.
+- `uq_game` is still `(season, home_team_id, away_team_id, game_date)`; `team_lo`/`team_hi` absent.
+- `laxnumbers_teams` absent. No Claremont alias.
+- `status_note`: `note=Overtime` 29, `note=Forfeit` 10, `note=One Referee` 3, `note=No Referees` 1.
+- `is_forfeit = 1` on 5 games, all LaxNumbers (ID/NV, window #4-lite). On none of the 10 WHSBLA forfeits.
+
+### The forfeit flags: what happened, and why the fix belongs here
+
+**Answered.** Of the two explanations in `docs/backlog.md`, it is the first, with a twist:
+- Emergency partial-J (2026-07-30) applied only section J's statements 1 and 6 (the
+  column and index). Statements 2–5 were verified as no-ops *at that moment*, because
+  prod held no Washington games, and were left for window #2 to run.
+- Window #3 then imported WHSBLA's games: all 10 forfeit rows were created 2026-07-30
+  16:41–16:42 by `import-whsbla.js`, which writes `status_note = 'note=<notation>'` and
+  never sets `is_forfeit`. The 29 `note=Overtime` notes J deletes came back the same way.
+- So J's backfill ran, or would have, against a table with nothing to backfill. The data
+  arrived afterwards through a path J never changed.
+
+**It belongs in this window**: the SQL is section J's own, already reviewed; it is four
+idempotent data statements; the rehearsal is the same dump; and `status_note` is not
+exposed by any API field, so the only visible effect is `isForfeit` turning true on
+10 games. The other half — `import-whsbla.js` setting `is_forfeit` and dropping the
+`note=` prefix — is code and goes with the takeover fixes in the backlog, before the first
+2027 WHSBLA import. Until then, a re-import would undo step 3.
+
+The 10 games: 76032, 76159, 76200, 76274, 76293, 76314, 76324, 76355, 76356, 76376
+(all Washington, all `canonical_source = 'whsbla'`).
+
+### Rehearsal — before the window, on a fresh dump
+
+**Built and run 2026-11-15**: `W6_REPLAY=<recordings> ./scripts/rehearse-on-prod-schema.sh --window6`
+(branch `rehearsal-window6`, `9db4932`). Every check below passed; see "Rehearsal result".
+Items 3 and 4 are applied by `scripts/window6-data.js`, the same script the window runs.
+After the baseline it:
+0. **forces section I to fail**: inserts a mirrored copy of a real game, runs section I,
+   requires `ER_DUP_ENTRY` and a `games` schema identical to before (SHOW CREATE TABLE,
+   columns, indexes, foreign keys; AUTO_INCREMENT ignored), and no leftover `#sql` table;
+   then removes the copy. Run against the old five-statement file, this check fails;
+1. applies items 1–4 in window order to the restored dump, at prod's version and `sql_mode`;
+2. runs `prod-smoke.sh` against HEAD's API on the result: **38/38**;
+3. asserts the expected diff, pinned by this run and asserted on every later one:
+   - `games` count unchanged; `SHOW INDEX` shows `uq_game` on `(season, team_lo, team_hi, game_date)`
+     and the new `idx_games_home_date`;
+   - `is_forfeit = 1`: 5 → 15, the 10 added being exactly the ids above;
+     `status_note LIKE 'note=%'`: 43 → 0; the officiating notes kept, prefix stripped;
+   - API: every v2 read endpoint for the six states and every team's schedule (270
+     responses), before vs after, games matched by id: the only difference is `isForfeit`
+     false → true, on exactly those 10 (`scripts/window6-payload.js`);
+   - team records and standings unchanged (no record query reads `is_forfeit`);
+   - `laxnumbers_teams` exists with 0 rows; `team_aliases` +1;
+4. **proves section I can fail**: inside a transaction, insert a mirrored copy of a real game
+   — must be refused with `ER_DUP_ENTRY` — then roll back;
+5. runs `test-writegames.js` against the container: the OHSLA writer's reversed-orientation
+   lookup (`src/dual-write.js`) under the new key;
+6. runs the LaxNumbers import dry run for WA from the 2026 recordings against the container:
+   unresolved **3 → 0** (the Claremont rows). Other lines move, explained below.
+
+### Rehearsal result — 2026-11-15, fresh prod dump, MySQL 8.4.11, `NO_ENGINE_SUBSTITUTION`
+
+All checks passed; gate exit 0; prod-smoke **38/38**; truth anchor OR 345 = 345; the
+cross-state audit clean.
+
+- **Forced failure:** `ERROR 1062 Duplicate entry … for key 'games.uq_game'`; schema
+  identical; no `team_lo`/`team_hi`; `uq_game` still on the old columns; no `#sql` table.
+  The same check against the old five-statement section I: **FAIL** — both columns added
+  and **no `uq_game` at all** — the half state this rewrite removes.
+- **Section I** applied in under a second (COPY rebuild of 1328 rows); all 4 foreign keys
+  survive; `games` 1328 before and after. **Section N:** table present, 0 rows.
+- **Data:** J 2–5 changed 10 / 29 / 10 / 4 rows; `is_forfeit` 5 → 15, the 10 added being the
+  pinned ids; `note=%` 43 → 0; `One Referee` 3 and `No Referees` 1 kept. Every
+  `note=Overtime` game already had `is_overtime = 1`, so deleting those notes loses nothing.
+  Alias: `team_aliases` 469 → 470. A second run of the data script: both items "already
+  applied", nothing changed.
+- **Mirrored copy refused** after section I (`ER_DUP_ENTRY`, rolled back).
+- **Payloads:** 270 responses; `isForfeit` false → true on the 10 games (30 appearances);
+  0 other differences, records and standings included.
+- **`test-writegames.js`** against the container: all cases passed.
+- **WA LaxNumbers dry run:** resolved 979 → 982, unresolved 3 → 0, matched 494 → 497. And
+  conflicts 119 → 111 fields (109 → 104 games), which is the forfeit fix, not the alias
+  (measured separately, full conflict list):
+  - 9 conflicts go away: LaxNumbers already shows those 9 games as forfeits;
+  - 1 appears: **#76032, 2026-03-25 South Kitsap v North Kitsap.** WHSBLA records it as a
+    forfeit; LaxNumbers shows it as a normal result. WHSBLA owns the row, so the app will
+    show FF on it. Worth a look before the window.
+  - The alias adds and removes no conflict.
+
+### Sequence
+
+Run at an **odd UTC hour**, well clear of the even-hour cron (see "Railway cron fires in
+UTC"), so no scrape transaction holds `games` during the DDL.
+
+```
+ 1. Fresh prod dump; restore it in the rehearsal container       [rollback anchor, retained]
+ 2. Preflight on prod, read-only, inside START TRANSACTION … ROLLBACK:
+      unordered-pair duplicates = 0, note=Forfeit = 10, is_forfeit = 5,
+      laxnumbers_teams absent, Claremont alias absent.  Any mismatch → stop.
+ 3. SET SESSION lock_wait_timeout = 30;  section-i  (one ALTER)   (DDL)
+ 4. section-n                                                      (DDL)
+ 5–6. node scripts/window6-data.js --window6 --commit              (data)
+      J statements 2–5, then the alias, each its own transaction:
+      checks before, statements, checks after, COMMIT only if all hold
+ 7. ./scripts/prod-smoke.sh → 38/38
+ 8. Step 3 of the rehearsal's assertions, against live prod
+ 9. Watch the next cron run: OHSLA writes under the new key without error;
+    /api/v2/health and /api/v2/health/laxnumbers unchanged
+```
+
+### What could go wrong
+
+- **A mirrored duplicate appears between the dump and the window** → section I fails with
+  `ER_DUP_ENTRY` and, being one statement, changes nothing (rehearsed). Stop the window,
+  find the pair, and rerun once it is resolved. Step 2 checks for it first. Only the OHSLA
+  cron writes in between, and it looks up the reversed orientation before inserting, so a
+  new mirrored pair is not expected.
+- **Section I blocks writes while it runs.** `ALGORITHM = COPY` rebuilds `games`; reads
+  continue, writes wait. It took under a second on 1328 rows, and the odd hour keeps the
+  cron's writes away from it.
+- **The DDL waits on a metadata lock** behind a long transaction and stalls API reads queued
+  behind it. The odd-hour timing and the 30 s `lock_wait_timeout` make it fail fast instead;
+  retry later.
+- **`import-whsbla.js` under the new key.** It has no reversed-orientation lookup. Today a
+  WHSBLA row with the opposite home side to an existing row inserts a duplicate; after
+  section I it updates that row's scores without swapping the teams, which can show the
+  wrong winner (fixture B, 2026-11-15). Nothing runs it until 2027; its fix is in the
+  backlog with the trigger "before the first 2027 WHSBLA export is imported". Section I is
+  still the right key: it turns a silent duplicate into one wrong row that the takeover fix
+  then removes.
+- **Forfeits become visible.** 10 Washington games show the FF badge in the app (2.0.0
+  already decodes `isForfeit`). Correct, and deliberate; it wants a line in the release
+  notes. W–L does not change.
+- **A WHSBLA re-import before its fix** writes the notes back with `is_forfeit = 0`. Nothing
+  is scheduled to re-import 2026; the backlog entry covers it.
+- **The alias collides.** `team_aliases` is unique on the normalised alias and state; the dump
+  has no Claremont row in any state, and step 2 re-checks.
+- **Section N is unused until diff 7 ships.** Harmless both ways: today's code never reads it,
+  and diff 7 runs as before when the table is missing.
+
+### Rollback
+
+Each item independently, in reverse order:
+- **Alias:** `DELETE FROM team_aliases WHERE alias = 'Claremont School 1' AND state = 'BC' AND source = 'laxnumbers';`
+- **Forfeits:** `UPDATE games SET is_forfeit = 0 WHERE id IN (<the 10>);` The notes are not
+  user-visible; restore them from the dump only if wanted.
+- **Section N:** `DROP TABLE laxnumbers_teams;` (empty, nothing references it).
+- **Section I**, also one statement, so it cannot half-apply either:
+  ```sql
+  ALTER TABLE games
+    DROP INDEX uq_game,
+    ADD UNIQUE KEY uq_game (season, home_team_id, away_team_id, game_date),
+    DROP INDEX idx_games_home_date,
+    DROP COLUMN team_hi, DROP COLUMN team_lo,
+    ALGORITHM = COPY;
+  ```
+  Tested 2026-11-15 on the dump at 8.4.11: SHOW CREATE TABLE afterwards is identical to
+  before section I. The old key is looser than the new one, so no row written in between
+  can block it.

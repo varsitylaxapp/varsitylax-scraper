@@ -410,12 +410,14 @@ from `status_note = 'note=Forfeit'`, and removed the `note=` prefix.
 
 The prod dump of 2026-11-15 disagrees. Every WHSBLA game with a forfeit note has
 `is_forfeit = 0`, and the notes still read `note=Forfeit`. So `isForfeit` is false for
-every game in the app, and those 10 games count as ordinary results.
+all 10 WHSBLA forfeits, which count as ordinary results. (`is_forfeit = 1` is set on 5
+games, all LaxNumbers ID/NV rows from window #4-lite.)
 
-Leading explanation, not yet proven: `import-whsbla.js` still writes `note=…` and never
-sets `is_forfeit`. If window #3 (stage c) imported WHSBLA's games into production after
-section J's column existed, the backfill would not have covered them. The other
-possibility is that section J's backfill never ran on production.
+**Cause, found 2026-11-15** (RELEASE.md, window #6): emergency partial-J applied only
+section J's column and index; its backfill and note cleanup were no-ops then, because
+prod had no Washington games. Window #3 then imported them with `import-whsbla.js`, which
+writes `note=<notation>` and never sets `is_forfeit`. All 10 rows were created
+2026-07-30 16:41–16:42, and the 29 `note=Overtime` notes J deletes came back the same way.
 
 Diff 6 logs 9 of these games as `is_forfeit` conflicts (LaxNumbers says forfeit, our
 row says not). They are our gap, not WHSBLA's, and were kept out of the CSV for WHSBLA
@@ -423,6 +425,8 @@ row says not). They are our gap, not WHSBLA's, and were kept out of the CSV for 
 
 ### What it needs
 
-Find which explanation is true, then a reviewed backfill (`is_forfeit = 1`, note
-prefix removed) in a production window, plus `import-whsbla.js` setting `is_forfeit`
-from the notation. The importer part goes with the takeover fixes above.
+- **Data:** re-run section J's statements 2–5 on prod. Planned as item 3 of window #6
+  (RELEASE.md).
+- **Code:** `import-whsbla.js` sets `is_forfeit` from the notation and stops writing the
+  `note=` prefix, so a re-import cannot undo the backfill. Goes with the takeover fixes
+  above, under the same trigger.
